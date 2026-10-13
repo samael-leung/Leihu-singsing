@@ -34,6 +34,25 @@
       <button id="yt-go" type="submit">下載並分析</button>
       <span id="yt-msg" class="hint"></span>
     </form>
+    <details id="playlist-panel" class="playlist-panel">
+      <summary>YouTube 播放清單批量匯入</summary>
+      <form id="playlist-form" class="yt">
+        <input id="playlist-url" type="url" placeholder="https://www.youtube.com/playlist?list=…" aria-label="YouTube 播放清單網址" required>
+        <label>起始項目 <input id="playlist-start" type="number" value="1" min="1" max="100000" style="width:90px"></label>
+        <button id="playlist-preview" type="submit">讀取清單</button>
+      </form>
+      <div id="playlist-message" class="hint" role="status" aria-live="polite"></div>
+      <div id="playlist-selection" hidden>
+        <div class="row"><b id="playlist-title"></b><button id="playlist-all" type="button" class="ghost">全選／全不選</button><button id="playlist-import" type="button" class="primary">匯入勾選歌曲</button><button id="playlist-next" type="button" hidden>下一批 200 首</button></div>
+        <div id="playlist-items" class="playlist-items"></div>
+      </div>
+      <div id="playlist-batch" hidden>
+        <label class="row">匯入批次 <select id="playlist-history" aria-label="切換匯入批次"></select></label>
+        <div class="row"><span id="playlist-summary" class="hint" role="status"></span><button id="playlist-stop" class="ghost">停止尚未開始的歌曲</button><button id="playlist-retry" class="ghost">重試失敗／中斷項目</button></div>
+        <div id="playlist-results" class="playlist-items"></div>
+      </div>
+      <p class="hint">每次列出最多 200 首，勾選後逐首下載、分軌及分析。一首失敗不影響後續歌曲；已存在的歌曲會略過。僅適用可存取的清單與影片，私人／已刪除項目可能無法下載。</p>
+    </details>
     <div id="drop" class="drop">把音訊檔拖到這裡。匯入後會自動分離主唱、合音、伴奏，分析旋律並辨識歌詞。</div>
     <div id="jobs" class="jobs"></div>
     <div class="lib-tools">

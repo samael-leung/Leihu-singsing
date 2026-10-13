@@ -309,27 +309,38 @@ def step_youtube(d: Path, url: str, report) -> None:
                 "--print", "before_dl:TITLE %(title)s",
                 "--print", "before_dl:META %(track)s\t%(artist)s\t%(uploader)s", "--no-warnings"]
         flags = 0x08000000 if sys.platform == "win32" else 0   # 不要跳出黑色視窗
-        p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        from collections import deque
+        p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                              encoding="utf-8", errors="replace", creationflags=flags,
                              env=dict(os.environ, PYTHONIOENCODING="utf-8"))
-        title = ""
-        for line in p.stdout:
-            line = line.strip()
-            if line.startswith("TITLE "):
-                title = line[6:]
-                update_meta(d, title=title[:120])
-            elif line.startswith("META "):
-                track, artist, uploader = (line[5:].split("\t") + ["", "", ""])[:3]
-                clean = lambda v: "" if v in ("NA", "None") else v.strip()
-                update_meta(d, yt_track=clean(track), yt_artist=clean(artist), yt_uploader=clean(uploader))
-            elif line.startswith("PROG "):
-                m = re.search(r"([\d.]+)%", line)
-                if m:
-                    frac = float(m.group(1)) / 100
-                    report(f"從 YouTube 下載音訊 {frac * 100:.0f}%", 0.01 + 0.05 * frac)
-        err = p.stderr.read()
-        p.wait()
-        return p.returncode, title, err
+        title, errors = "", deque(maxlen=50)
+        try:
+            for line in p.stdout:
+                line = line.strip()
+                if line.startswith("TITLE "):
+                    title = line[6:]
+                    update_meta(d, title=title[:120])
+                elif line.startswith("META "):
+                    track, artist, uploader = (line[5:].split("\t") + ["", "", ""])[:3]
+                    clean = lambda v: "" if v in ("NA", "None") else v.strip()
+                    update_meta(d, yt_track=clean(track), yt_artist=clean(artist), yt_uploader=clean(uploader))
+                elif line.startswith("PROG "):
+                    m = re.search(r"([\d.]+)%", line)
+                    if m:
+                        frac = float(m.group(1)) / 100
+                        report(f"從 YouTube 下載音訊 {frac * 100:.0f}%", 0.01 + 0.05 * frac)
+                else:
+                    errors.append(line[-2000:])
+            p.wait()
+            return p.returncode, title, "\n".join(errors)
+        finally:
+            if p.poll() is None:
+                p.terminate()
+                try:
+                    p.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    p.kill(); p.wait()
+            p.stdout.close()
 
     report("取得影片資訊", 0.01)
     code, title, err = attempt()

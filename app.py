@@ -17,6 +17,7 @@ from flask import Flask, abort, jsonify, request, send_file, send_from_directory
 
 import ai_api as C
 import forced_alignment as FA
+import youtube_playlist as YP
 import model_setup as MS
 import pipeline as P
 import share as SH
@@ -163,8 +164,9 @@ def add_song():
 @app.post("/api/youtube")
 def add_youtube():
     url = P.clean_youtube_url((request.get_json(force=True) or {}).get("url", ""))
+    active = {job["song"] for job in jobs.active() if job["status"] in ("queued", "running")}
     for m in P.list_songs():
-        if m.get("source_url") == url and m.get("steps", {}).get("import"):
+        if m.get("source_url") == url and (m.get("steps", {}).get("import") or m["id"] in active):
             raise P.UserError(f"這首歌已經在歌曲庫裡：{m.get('title')}")
     sid = P.new_youtube_song(url)
     cat = (request.get_json(force=True) or {}).get("category") or None
@@ -172,6 +174,41 @@ def add_youtube():
         P.update_meta(P.song_dir(sid), category=cat)
     jid = jobs.submit("process", sid, P.youtube_job(sid, url), label="youtube")
     return jsonify(id=sid, job=jid)
+
+
+@app.post('/api/youtube/playlist/preview')
+def playlist_preview():
+    body = request.get_json(force=True) or {}
+    return jsonify(YP.preview(body.get('url'), body.get('start', 1)))
+
+
+@app.post('/api/youtube/playlist/import')
+def playlist_import():
+    body = request.get_json(force=True) or {}
+    category = body.get('category') or None
+    if category not in P.load_categories():
+        category = None
+    return jsonify(YP.create(body.get('items'), category, jobs))
+
+
+@app.get('/api/youtube/playlist/batches/<bid>')
+def playlist_batch(bid):
+    return jsonify(YP.status(bid, jobs))
+
+
+@app.get('/api/youtube/playlist/batches')
+def playlist_recent():
+    return jsonify(YP.recent(jobs))
+
+
+@app.post('/api/youtube/playlist/batches/<bid>/stop')
+def playlist_stop(bid):
+    return jsonify(YP.stop(bid, jobs))
+
+
+@app.post('/api/youtube/playlist/batches/<bid>/retry')
+def playlist_retry(bid):
+    return jsonify(YP.retry(bid, jobs))
 
 
 @app.get("/api/songs/<sid>")

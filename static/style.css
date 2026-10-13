@@ -316,3 +316,16 @@ a.tab { text-decoration: none; font-size: 14px; }
 .ov-opts { display: grid; grid-template-columns: auto 1fr; gap: 8px 12px; align-items: center; }
 .ov-opts label { font-size: 13px; color: var(--muted); }
 #ov-color { width: 44px; height: 28px; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: none; }
+
+/* YouTube playlist import */
+.playlist-panel { margin: 12px 0; padding: 12px; border: 1px solid var(--line); border-radius: 10px; }
+.playlist-panel summary { cursor: pointer; }
+.playlist-panel .yt { margin-top: 10px; }
+.playlist-panel input[type="url"] { flex: 1 1 300px; min-width: 0; }
+.playlist-items { display: grid; gap: 6px; max-height: 320px; overflow: auto; margin: 10px 0; }
+.playlist-item { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px; align-items: start; padding: 6px; border-bottom: 1px solid var(--line); }
+.playlist-item span { overflow-wrap: anywhere; }
+.playlist-item.disabled { color: var(--muted); }
+.playlist-result { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; padding: 8px; border-bottom: 1px solid var(--line); }
+.playlist-result span { overflow-wrap: anywhere; }
+.playlist-result .hint { grid-column: 1 / -1; }

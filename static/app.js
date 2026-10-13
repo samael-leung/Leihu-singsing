@@ -260,6 +260,79 @@ $("#yt-form").addEventListener("submit", async e => {
   finally { btn.disabled = false; }
 });
 $("#yt-url").addEventListener("input", () => { $("#yt-msg").textContent = ""; $("#yt-msg").classList.remove("err"); });
+let playlistPreview = null, playlistBatchId = store.get("youtubeBatch", ""), playlistTimer = null;
+const playlistStatus = {queued:"排隊中",running:"處理中",done:"已匯入",error:"失敗",interrupted:"上次中斷",cancelled:"已停止",skipped:"已略過"};
+async function readPlaylist(start) {
+  const button = $("#playlist-preview"), message = $("#playlist-message");
+  button.disabled = true; message.textContent = "讀取播放清單中…";
+  try {
+    playlistPreview = await api("/api/youtube/playlist/preview", {json:{url:$("#playlist-url").value.trim(),start}});
+    $("#playlist-title").textContent = playlistPreview.title;
+    $("#playlist-selection").hidden = false;
+    $("#playlist-next").hidden = !playlistPreview.next_start;
+    const box = $("#playlist-items"); box.innerHTML = "";
+    playlistPreview.items.forEach((item,index) => {
+      const row=document.createElement("label");row.className="playlist-item"+(item.available?"":" disabled");
+      const checkbox=document.createElement("input");checkbox.type="checkbox";checkbox.checked=item.available;checkbox.disabled=!item.available;checkbox.dataset.index=index;
+      const text=document.createElement("span");text.textContent=`${item.index}. ${item.title}${item.available?"":"（無法下載）"}`;
+      row.append(checkbox,text);box.appendChild(row);
+    });
+    message.textContent = `已列出 ${playlistPreview.items.length} 項，請勾選要匯入的歌曲${playlistPreview.next_start?"；大型清單可繼續讀取下一批":""}。`;
+  } catch(e) { message.textContent=e.message; }
+  finally { button.disabled=false; }
+}
+async function pollPlaylist(restore = false) {
+  clearTimeout(playlistTimer);
+  if(!playlistBatchId) return;
+  const bid=playlistBatchId;
+  try {
+    const batch=await api(`/api/youtube/playlist/batches/${bid}`);
+    if(bid!==playlistBatchId)return;
+    $("#playlist-batch").hidden=false;
+    const totals={};for(const row of batch.items)totals[row.status]=(totals[row.status]||0)+1;
+    if(restore && (totals.queued||totals.running||totals.interrupted)) $("#playlist-panel").open=true;
+    $("#playlist-summary").textContent=`共 ${batch.items.length} 首・完成 ${totals.done||0}・失敗／中斷 ${(totals.error||0)+(totals.interrupted||0)}・略過 ${totals.skipped||0}・等待 ${(totals.queued||0)+(totals.running||0)}`;
+    $("#playlist-stop").disabled=!totals.queued;
+    $("#playlist-retry").disabled=!((totals.error||0)+(totals.interrupted||0)+(totals.cancelled||0));
+    const box=$("#playlist-results"), scroll=box.scrollTop;box.innerHTML="";
+    for(const row of batch.items) {
+      const el=document.createElement("div");el.className="playlist-result";
+      const title=document.createElement("span");title.textContent=row.title;
+      const state=document.createElement("span");state.textContent=playlistStatus[row.status]||row.status;
+      const step=document.createElement("span");step.className="hint";step.textContent=row.error||(row.status==="running"?`${row.step||"處理中"} ${Math.round((row.progress||0)*100)}%`:"");
+      el.append(title,state,step);box.appendChild(el);
+    }
+    box.scrollTop=scroll;
+    if(totals.queued||totals.running) playlistTimer=setTimeout(pollPlaylist,1000);
+    else {loadSongs();pollJobs();}
+  } catch(e) { $("#playlist-message").textContent=e.message; }
+}
+async function refreshPlaylistHistory() {
+  try {
+    const batches=await api('/api/youtube/playlist/batches'),select=$("#playlist-history");select.innerHTML="";
+    for(const batch of batches){const option=document.createElement('option');option.value=batch.id;option.textContent=`${new Date(batch.created*1000).toLocaleString()}・${batch.total} 首`;select.appendChild(option);}
+    select.value=playlistBatchId;
+  }catch(e){$("#playlist-message").textContent=e.message;}
+}
+$("#playlist-history").onchange=()=>{playlistBatchId=$("#playlist-history").value;store.set('youtubeBatch',playlistBatchId);pollPlaylist();};
+$("#playlist-form").addEventListener("submit",e=>{e.preventDefault();readPlaylist(Number($("#playlist-start").value));});
+$("#playlist-next").onclick=()=>{if(playlistPreview?.next_start){$("#playlist-start").value=playlistPreview.next_start;readPlaylist(playlistPreview.next_start);}};
+$("#playlist-all").onclick=()=>{const checks=$$('input[type="checkbox"]:not(:disabled)',$("#playlist-items"));const all=checks.every(c=>c.checked);checks.forEach(c=>c.checked=!all);};
+$("#playlist-import").onclick=async()=>{
+  if(!playlistPreview)return;
+  const items=$$('input[type="checkbox"]:checked',$("#playlist-items")).map(c=>playlistPreview.items[Number(c.dataset.index)]);
+  if(!items.length)return toast("先勾選要匯入的歌曲");
+  const button=$("#playlist-import");button.disabled=true;
+  try {const batch=await api("/api/youtube/playlist/import",{json:{items,category:importCategory()}});playlistBatchId=batch.id;store.set("youtubeBatch",batch.id);$("#playlist-message").textContent="已加入批量佇列，歌曲會逐首處理。";loadSongs();pollJobs();refreshPlaylistHistory();pollPlaylist();}
+  catch(e){$("#playlist-message").textContent=e.message;}
+  finally{button.disabled=false;}
+};
+for(const action of ["stop","retry"])$("#playlist-"+action).onclick=async()=>{
+  try{await api(`/api/youtube/playlist/batches/${playlistBatchId}/${action}`,{json:{}});pollPlaylist();pollJobs();}
+  catch(e){$("#playlist-message").textContent=e.message;}
+};
+if(playlistBatchId){refreshPlaylistHistory();pollPlaylist(true);}
+
 $("#import").onchange = e => { importFiles([...e.target.files]); e.target.value = ""; };
 const drop = $("#drop");
 ["dragenter", "dragover"].forEach(ev => document.addEventListener(ev, e => {
