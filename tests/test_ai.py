@@ -97,7 +97,31 @@ class AIIntegrationTests(unittest.TestCase):
     def test_truncated_text_is_not_returned(self):
         with patch.object(A, '_request', return_value=response('partial', 'length')):
             with self.assertRaisesRegex(P.UserError, '截斷'): A.ask_text('建議', 10, 'coach')
-        self.assertEqual(A.summary()['total']['calls'], 1)
+        self.assertEqual(A.summary()['total']['calls'], 2)
+
+    def test_truncated_advice_retries_once_and_counts_both_requests(self):
+        with patch.object(A, '_request', side_effect=[response('partial', 'length'), response('完整建議')]) as send:
+            text, usage = A.ask_text('建議', 3000, 'coach')
+        self.assertEqual(text, '完整建議')
+        bodies = [call.args[1] for call in send.call_args_list]
+        limits = [body['options']['num_predict'] if LOCAL else body['max_completion_tokens'] for body in bodies]
+        self.assertEqual(limits, [3000, 12000])
+        self.assertEqual(usage['input_tokens'], 240)
+        self.assertEqual(usage['output_tokens'], 60)
+        self.assertEqual(A.summary()['total']['calls'], 2)
+
+    def test_structured_alignment_does_not_retry_truncated_output(self):
+        with patch.object(A, '_request', return_value=response('{"times":', 'length')) as send:
+            with self.assertRaises(P.UserError): A.ask_tool('對齊', TOOL, 8000, 'align')
+        self.assertEqual(send.call_count, 1)
+
+    @unittest.skipIf(LOCAL, 'OpenAI retry pricing')
+    def test_retry_cost_includes_both_billed_requests(self):
+        cfg=P.load_config(); cfg.update(ai_price_model=MODEL,ai_input_price=0.4,ai_output_price=1.6); P.save_config(cfg)
+        with patch.object(A, '_request', side_effect=[response('partial', 'length'), response('完整建議')]):
+            _, usage=A.ask_text('建議',3000,'coach')
+        self.assertEqual(usage['cost_usd'],0.000192)
+        self.assertEqual(A.summary()['total']['cost_usd'],0.000192)
 
     def test_empty_output_is_rejected(self):
         with patch.object(A, '_request', return_value=response('')):

@@ -4,11 +4,12 @@ Unicode true
 RequestExecutionLevel user
 SilentInstall silent
 SetCompressor /SOLID lzma
-Name "雷虎練唱台 一鍵完整移除"
+!define /file VERSION "..\VERSION"
+Name "雷虎練唱台 ${VERSION} 一鍵完整移除"
 !ifdef LOCAL_MODEL
-OutFile "out\LeihuLiantai-localModel-1.4.1-CleanUninstall.exe"
+OutFile "out\LeihuLiantai-localModel-${VERSION}-CleanUninstall.exe"
 !else
-OutFile "out\LeihuLiantai-OpenAI-1.4.1-CleanUninstall.exe"
+OutFile "out\LeihuLiantai-OpenAI-${VERSION}-CleanUninstall.exe"
 !endif
 Icon "..\static\icon.ico"
 Section

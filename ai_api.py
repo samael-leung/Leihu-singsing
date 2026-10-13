@@ -104,9 +104,24 @@ def _validate(data, schema):
     return data
 
 
+class ResponseTruncated(P.UserError):
+    def __init__(self, usage):
+        super().__init__('AI 回覆被截斷，請縮短輸入或分段處理。')
+        self.usage = usage
+
+
 def ask_text(prompt, max_tokens, purpose, song=''):
-    text, usage = _call(prompt, max_tokens, purpose, song)
-    return text, usage
+    try:
+        return _call(prompt, max_tokens, purpose, song)
+    except ResponseTruncated as first:
+        # Match upstream's single bounded retry and retain both requests' usage.
+        text, second = _call(prompt, max_tokens * 4, purpose, song)
+        usage = dict(second)
+        for key in ('input_tokens', 'output_tokens'):
+            usage[key] += first.usage[key]
+        a, b = first.usage['cost_usd'], second['cost_usd']
+        usage['cost_usd'] = None if a is None or b is None else round(a + b, 6)
+        return text, usage
 
 
 def ask_tool(prompt, tool, max_tokens, purpose, song=''):
@@ -154,7 +169,7 @@ def _call(prompt, max_tokens, purpose, song, schema=None):
     text = result.get('message', {}).get('content')
     usage = record(model, int(result.get('prompt_eval_count') or 0), int(result.get('eval_count') or 0), purpose, song)
     if result.get('done_reason') == 'length':
-        raise P.UserError('本機模型回覆被截斷，請縮短歌詞或分段處理。')
+        raise ResponseTruncated(usage)
     if not result.get('done') or not isinstance(text, str) or not text.strip():
         raise P.UserError('本機模型沒有完成有效回覆，請再試一次。')
     return text.strip(), usage
