@@ -112,6 +112,8 @@ try {
     $state | ConvertTo-Json | Set-Content (Join-Path $root 'cleanup-state.json')
     Remove-Item (Join-Path $root 'app.py'),(Join-Path $root 'desktop.py'),(Join-Path $root 'VERSION')
     Assert ((Get-CleanupPlan $root $false).State.models_cleaned) 'Partially finished cleanup cannot resume'
+    Assert (Test-AppShortcutTarget 'C:\App' 'C:\App\python\pythonw.exe' '') 'Own application shortcut was not recognized'
+    Assert (!(Test-AppShortcutTarget 'C:\App' 'C:\App-other\python\pythonw.exe' '')) 'Another installation shortcut would be deleted'
     Write-Output "Cleanup functional checks passed: $script:checks"
 } finally {
     Remove-SafeTree $fixture

@@ -201,6 +201,31 @@ function Remove-AppFiles($Plan, [bool]$KeepData) {
     if (!(Get-ChildItem -LiteralPath $Plan.Root -Force)) { Remove-Item -LiteralPath $Plan.Root -Force }
 }
 
+function Test-AppShortcutTarget([string]$Root,[string]$Target,[string]$Arguments) {
+    $prefix=$Root.TrimEnd('\') + '\'
+    return ($Target.StartsWith($prefix,[StringComparison]::OrdinalIgnoreCase) -or
+            $Arguments.IndexOf($prefix,[StringComparison]::OrdinalIgnoreCase) -ge 0 -or
+            $Arguments.IndexOf('"' + $Root + '"',[StringComparison]::OrdinalIgnoreCase) -ge 0)
+}
+
+function Remove-AppShortcuts([string]$Root) {
+    $desktop=[Environment]::GetFolderPath('Desktop')
+    $folder=Join-Path ([Environment]::GetFolderPath('Programs')) '雷虎練唱台'
+    $paths=@((Join-Path $desktop '雷虎練唱台.lnk'),(Join-Path $desktop '雷虎練唱台 完整移除.lnk'))
+    if (Test-Path -LiteralPath $folder) { $paths += @(Get-ChildItem -LiteralPath $folder -Filter '*.lnk' | ForEach-Object { $_.FullName }) }
+    $shell=New-Object -ComObject WScript.Shell
+    try {
+        foreach ($path in $paths) {
+            if (Test-Path -LiteralPath $path) {
+                $shortcut=$shell.CreateShortcut($path)
+                if (Test-AppShortcutTarget $Root $shortcut.TargetPath $shortcut.Arguments) { Remove-Item -LiteralPath $path -Force }
+                [Runtime.InteropServices.Marshal]::ReleaseComObject($shortcut) | Out-Null
+            }
+        }
+        if ((Test-Path -LiteralPath $folder) -and !(Get-ChildItem -LiteralPath $folder -Force)) { Remove-Item -LiteralPath $folder -Force }
+    } finally { [Runtime.InteropServices.Marshal]::ReleaseComObject($shell) | Out-Null }
+}
+
 function Invoke-Cleanup($Plan, $Selection) {
     $state=@{app='LeihuLiantai';root=$Plan.Root;base=$Plan.Base;models=$Plan.Models;ownership=$Plan.Ownership;
              models_cleaned=$false;runtime_cleaned=$false;remaining_models=@()}
@@ -231,12 +256,7 @@ function Invoke-Cleanup($Plan, $Selection) {
     }
     Set-Location $env:TEMP
     Remove-AppFiles $Plan $Selection.KeepData
-    $desktop=[Environment]::GetFolderPath('Desktop')
-    foreach ($name in @('雷虎練唱台.lnk','雷虎練唱台 完整移除.lnk')) {
-        Remove-Item -LiteralPath (Join-Path $desktop $name) -Force -ErrorAction SilentlyContinue
-    }
-    $programs=[Environment]::GetFolderPath('Programs')
-    Remove-Item -LiteralPath (Join-Path $programs '雷虎練唱台') -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-AppShortcuts $Plan.Root
     $key='HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\LeihuLiantai'
     if (Test-Path -LiteralPath $key) {
         if ((Get-ItemProperty -LiteralPath $key).InstallLocation -eq $Plan.Root) {
