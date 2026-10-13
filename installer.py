@@ -96,7 +96,7 @@ def step(n: int, total: int, title: str) -> None:
 def run(args: list[str], quiet: bool = True, on_line=None) -> int:
     LOG.write("> " + " ".join(args) + "\n")
     env = dict(os.environ, PYTHONIOENCODING="utf-8", PIP_DISABLE_PIP_VERSION_CHECK="1",
-               PIP_NO_WARN_SCRIPT_LOCATION="1")
+               PIP_NO_WARN_SCRIPT_LOCATION="1", PIP_CACHE_DIR=str(ROOT / "downloads" / "pip-cache"))
     p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                          encoding="utf-8", errors="replace", env=env)
     for line in p.stdout:
@@ -563,6 +563,8 @@ def prepare_ollama() -> bool:
                 raise RuntimeError("設定中的遠端 Ollama 無法連線；請啟動該服務後重試。")
             if sys.platform != "win32":
                 raise RuntimeError("自動安裝 Ollama 僅支援 Windows。")
+            model_dir = Path(os.environ.get("OLLAMA_MODELS") or (Path.home() / ".ollama" / "models"))
+            model_dir_new = not model_dir.exists()
             say("  下載官方 Ollama 安裝程式…")
             setup = download("https://ollama.com/download/OllamaSetup.exe",
                              DL / "OllamaSetup.exe", label="Ollama", part=(0, 0.15))
@@ -578,8 +580,20 @@ def prepare_ollama() -> bool:
             say("  靜默安裝 Ollama（目前使用者，不需要管理員權限）…")
             if run([str(setup), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-"], quiet=False):
                 raise RuntimeError("Ollama 安裝失敗，請查看 logs/install.log。")
-            if O.find_ollama() is None:
+            installed_cli = O.find_ollama()
+            if installed_cli is None:
                 raise RuntimeError("Ollama 安裝後找不到執行檔，請重新執行修復與更新。")
+            ownership = {"installed_by_app": True,
+                         "install_dir": str(installed_cli.parent),
+                         "model_dir": str(model_dir),
+                         "model_dir_created_by_app": model_dir_new, "models": []}
+            (ROOT / "ollama-install.json").write_text(json.dumps(ownership), "utf-8")
+        ownership_file = ROOT / "ollama-install.json"
+        ownership = json.loads(ownership_file.read_text("utf-8")) if ownership_file.exists() else {
+            "installed_by_app": False, "models": []}
+        if model not in ownership["models"]:
+            ownership["models"].append(model)
+            ownership_file.write_text(json.dumps(ownership), "utf-8")
         progress(0.15, "啟動 Ollama")
         O.ensure_service(base, ROOT / "logs")
         say(f"  準備本機模型 {model}（預設模型約 9 GB，中斷後可續傳）…")

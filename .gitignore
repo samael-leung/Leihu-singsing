@@ -9,6 +9,8 @@ models/
 bin/
 downloads/
 installed.json
+ollama-install.json
+cleanup-state.json
 # Python
 __pycache__/
 *.pyc

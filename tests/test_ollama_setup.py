@@ -110,6 +110,8 @@ class InstallerOllamaTests(unittest.TestCase):
         with patch.object(O,'service_ready',return_value=False), patch.object(O,'find_ollama',return_value=Path('ollama.exe')), patch.object(I,'download') as download:
             self.assertTrue(I.prepare_ollama())
         download.assert_not_called()
+        ownership=json.loads((self.root/'ollama-install.json').read_text())
+        self.assertFalse(ownership['installed_by_app'])
         self.assertEqual(O.prepare_model.call_args.args[:2],('http://127.0.0.1:11434','qwen2.5:14b'))
 
     def test_official_installer_is_verified_before_execution(self):
@@ -120,6 +122,9 @@ class InstallerOllamaTests(unittest.TestCase):
         self.assertIn('Get-AuthenticodeSignature',signature.call_args.args[0])
         self.assertIn("$sig.Status -ne 'Valid'",signature.call_args.args[0])
         self.assertIn('/VERYSILENT',run.call_args.args[0])
+        ownership=json.loads((self.root/'ollama-install.json').read_text())
+        self.assertTrue(ownership['installed_by_app'])
+        self.assertEqual(ownership['models'],['qwen2.5:14b'])
 
     def test_unverified_installer_is_not_executed(self):
         setup=self.root/'OllamaSetup.exe'; setup.touch()

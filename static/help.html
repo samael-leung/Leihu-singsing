@@ -204,7 +204,7 @@ th { color: var(--muted); font-weight: 600; font-size: 13px; }
   </table></div>
 
   <h2 id="claude">本機 AI 功能與設定</h2>
-  <p>歌詞對齊與練習建議使用本機 Ollama，不需要 API 金鑰或雲端費用。Windows 安裝程式會準備 Ollama 與模型；從原始碼執行時請自行安裝 Ollama 並執行 <code>ollama pull qwen2.5:14b</code>。在設定確認網址 <code>http://127.0.0.1:11434</code> 與模型名稱。</p><p>預設使用 Qwen2.5 14B 的量化模型，適合 24GB 顯示記憶體。每次完成呼叫後會釋放模型，方便其他音訊模型使用 GPU。模型下載需要網路；完成後 AI 建議可離線執行。Windows 安裝檔會自動安裝 Ollama 並下載設定中的模型；修復安裝可續傳。模型保存在 Ollama 共用目錄，解除安裝練唱台不會刪除它。</p>
+  <p>歌詞對齊與練習建議使用本機 Ollama，不需要 API 金鑰或雲端費用。Windows 安裝程式會準備 Ollama 與模型；從原始碼執行時請自行安裝 Ollama 並執行 <code>ollama pull qwen2.5:14b</code>。在設定確認網址 <code>http://127.0.0.1:11434</code> 與模型名稱。</p><p>預設使用 Qwen2.5 14B 的量化模型，適合 24GB 顯示記憶體。每次完成呼叫後會釋放模型，方便其他音訊模型使用 GPU。模型下載需要網路；完成後 AI 建議可離線執行。Windows 安裝檔會自動安裝 Ollama 並下載設定中的模型；修復安裝可續傳。模型保存在 Ollama 共用目錄，一般解除安裝會保留共用模型；桌面與開始選單的「完整移除」工具可清理練唱台模型。確認視窗預設保留歌曲與設定，可取消勾選一併刪除。只有沒有其他模型時，才可一併解除安裝 Ollama。</p>
 
   <h2 id="settings">設定</h2>
   <div class="tw"><table>

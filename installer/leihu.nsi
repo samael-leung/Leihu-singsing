@@ -115,12 +115,15 @@ Section "Install"
 
   ; 捷徑
   CreateShortCut "$DESKTOP\${APPNAME}.lnk" "$INSTDIR\python\pythonw.exe" '"$INSTDIR\desktop.py"' "$INSTDIR\static\icon.ico" 0
+  CreateShortCut "$DESKTOP\${APPNAME} 完整移除.lnk" "$INSTDIR\clean-uninstall.exe"
   CreateDirectory "$SMPROGRAMS\${APPNAME}"
   CreateShortCut "$SMPROGRAMS\${APPNAME}\${APPNAME}.lnk" "$INSTDIR\python\pythonw.exe" '"$INSTDIR\desktop.py"' "$INSTDIR\static\icon.ico" 0
   CreateShortCut "$SMPROGRAMS\${APPNAME}\${APPNAME} 修復與更新.lnk" "$PS" '-NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\setup\install.ps1" -AppDir "$INSTDIR" -Repair' "$INSTDIR\static\icon.ico" 0
   CreateShortCut "$SMPROGRAMS\${APPNAME}\${APPNAME} 修復（強制使用顯示卡加速）.lnk" "$PS" '-NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\setup\install.ps1" -AppDir "$INSTDIR" -Repair -Gpu cu128' "$INSTDIR\static\icon.ico" 0
   CreateShortCut "$SMPROGRAMS\${APPNAME}\${APPNAME} 使用說明.lnk" "$INSTDIR\使用說明.html"
   CreateShortCut "$SMPROGRAMS\${APPNAME}\解除安裝 ${APPNAME}.lnk" "$INSTDIR\uninstall.exe"
+
+  CreateShortCut "$SMPROGRAMS\${APPNAME}\${APPNAME} 完整移除.lnk" "$INSTDIR\clean-uninstall.exe"
 
   ; 「應用程式」清單中的解除安裝項目
   WriteUninstaller "$INSTDIR\uninstall.exe"
@@ -138,6 +141,7 @@ SectionEnd
 Section "Uninstall"
   !insertmacro StopApp "$INSTDIR"
   Delete "$DESKTOP\${APPNAME}.lnk"
+  Delete "$DESKTOP\${APPNAME} 完整移除.lnk"
   RMDir /r "$SMPROGRAMS\${APPNAME}"
   DeleteRegKey HKCU "${REGKEY}"
   MessageBox MB_YESNO|MB_ICONQUESTION "要一併刪除歌曲庫、錄音與設定（含 API 金鑰）嗎？$\r$\n$\r$\n選「否」會保留在：$INSTDIR\library" IDYES all
@@ -156,6 +160,7 @@ Section "Uninstall"
     Delete "$INSTDIR\*.html"
     Delete "$INSTDIR\VERSION"
     Delete "$INSTDIR\installed.json"
+    Delete "$INSTDIR\clean-uninstall.exe"
     Delete "$INSTDIR\uninstall.exe"
     Goto done
   all:
