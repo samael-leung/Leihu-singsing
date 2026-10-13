@@ -150,8 +150,8 @@ main { padding: 20px; max-width: 1280px; margin: 0 auto; }
 .keyval { min-width: 34px; text-align: center; font-family: var(--mono); font-weight: 600; }
 #play { min-width: 64px; justify-content: center; }
 
-.panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; margin-top: 14px; align-items: start; }
-.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; display: grid; gap: 10px; min-width: 0; }
+.panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); gap: 14px; margin-top: 14px; align-items: start; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; min-width: 0; }
 .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .fader { display: grid; grid-template-columns: 70px minmax(0, 1fr) 36px; align-items: center; gap: 8px; }
 .fader span:last-child { text-align: right; color: var(--muted); font-size: 12px; }
@@ -163,9 +163,10 @@ textarea { width: 100%; min-height: 160px; resize: vertical; font-family: var(--
 .take.sel { border-color: var(--voice); box-shadow: inset 3px 0 0 var(--voice); }
 .take .score { font-family: var(--mono); font-size: 18px; font-weight: 600; }
 .take .sub { font-size: 12px; color: var(--muted); }
-.detail { display: grid; gap: 6px; font-size: 13px; }
+.detail { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; font-size: 13px; min-width: 0; }
 .detail .line { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; }
-.coach { white-space: pre-wrap; font-size: 13.5px; line-height: 1.7; padding: 10px; background: var(--bg); border-radius: 8px; }
+.detail .line button { min-width: 0; white-space: normal; overflow-wrap: anywhere; text-align: left; }
+.coach { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13.5px; line-height: 1.7; padding: 10px; background: var(--bg); border-radius: 8px; }
 .rec { color: var(--bad); }
 .rec.live { background: var(--bad); color: #fff; border-color: var(--bad); }
 .tapbox { padding: 10px; border-radius: 8px; background: var(--bg); display: grid; gap: 6px; }
