@@ -34,6 +34,8 @@ python app.py --no-browser
 
 ```sh
 python -m unittest discover -s tests -v
+# 若環境有 Node.js，可驗證前端設定操作：
+node tests/settings_smoke.js
 ```
 
 測試以模擬服務驗證請求格式、錯誤、用量、設定金鑰遮罩及 Flask 對齊／建議流程，不需付費金鑰或下載大型模型。實際 AI 品質仍需在安裝模型或提供 API 金鑰後檢驗。
