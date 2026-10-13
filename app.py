@@ -16,6 +16,7 @@ from pathlib import Path
 from flask import Flask, abort, jsonify, request, send_file, send_from_directory
 
 import ai_api as C
+import forced_alignment as FA
 import model_setup as MS
 import pipeline as P
 import share as SH
@@ -522,6 +523,27 @@ ALIGN_TOOL = {
         "required": ["times"],
     },
 }
+
+
+@app.post('/api/songs/<sid>/lyrics/force-align')
+def force_align(sid):
+    d = P.song_dir(sid)
+    body = request.get_json(force=True) or {}
+    if not isinstance(body.get('text'), str):
+        raise P.UserError('請以文字貼上完整正確歌詞。')
+    text = body['text'].strip()
+    language = body.get('language') or 'zh'
+    if not text or len(text) > 12000:
+        raise P.UserError('請貼上完整正確歌詞（最多 12,000 字元）。')
+    if language not in FA.MODELS:
+        raise P.UserError('強制對齊目前支援中文普通話與英文。')
+    if not (d / 'lead.wav').is_file():
+        raise P.UserError('請先完成歌曲分軌。')
+    revision = FA.revision(d)
+    label = 'force-align:' + language + ':' + FA.hashlib.sha256((text + revision).encode()).hexdigest()
+    jid = jobs.find('alignment', sid, label) or jobs.submit(
+        'alignment', sid, lambda report: FA.run(d, text, language, revision, report), label=label)
+    return jsonify(job=jid)
 
 
 @app.post("/api/songs/<sid>/ai/align")

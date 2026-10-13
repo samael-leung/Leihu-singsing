@@ -218,10 +218,13 @@
           <div class="row"><button id="tap-hit" class="primary">這句開始</button><button id="tap-stop" class="ghost">結束打點</button></div>
         </div>
         <details>
-          <summary>貼上正確歌詞，用 AI 對齊時間（依設定的模式）</summary>
+          <summary>貼上正確歌詞，對齊音訊時間</summary>
           <div class="detail" style="margin-top:8px">
             <textarea id="ref-lyrics" placeholder="每行一句，照演唱順序貼上" style="min-height:120px"></textarea>
             <div class="row"><button id="align">用 AI 對齊</button><span id="align-state" class="hint"></span></div>
+            <div class="row"><label for="force-language">強制對齊語言</label><select id="force-language"><option value="zh">中文普通話</option><option value="en">英文</option></select><button id="force-align" class="primary">依音訊強制對齊</button></div>
+            <span id="force-state" class="hint" role="status" aria-live="polite"></span>
+            <p class="hint">直接對齊主唱音訊，不使用 API。請貼上整首、同版本的完整歌詞；首次會下載對齊模型。演唱、長尾音或錯漏歌詞仍需確認結果。</p>
             <span id="align-cost" class="hint"></span>
           </div>
         </details>

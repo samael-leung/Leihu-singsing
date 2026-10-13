@@ -1042,6 +1042,24 @@ $("#align").onclick = async () => {
   finally { b.disabled = false; }
 };
 
+$("#force-align").onclick = async () => {
+  const text = $("#ref-lyrics").value.trim(), sid = S.song?.id;
+  if (!text || !sid) return toast("先選擇歌曲，貼上完整正確歌詞");
+  const button = $("#force-align"), state = $("#force-state");
+  button.disabled = true; state.textContent = "準備音訊強制對齊…";
+  try {
+    const r = await api(`/api/songs/${sid}/lyrics/force-align`, {json: {text, language: $("#force-language").value}});
+    await waitJob(r.job, j => { state.textContent = `${j.step} ${Math.round(j.progress * 100)}%`; });
+    if (S.song?.id !== sid) return;
+    const result = await api(`/api/songs/${sid}/lyrics`);
+    $("#lrc").value = result.lrc; setLines(result.lrc);
+    state.textContent = "強制對齊完成，音訊逐字時間已儲存；請播放確認。";
+    if (!S.showLyr) { S.showLyr = true; store.set("showLyr", true); syncLyrButtons(); }
+    pollJobs();
+  } catch (e) { state.textContent = e.message; }
+  finally { button.disabled = false; }
+};
+
 /* 匯出歌詞：存到「下載\雷虎練唱台」 */
 let exportedPath = "";
 $("#exp-go").onclick = async () => {

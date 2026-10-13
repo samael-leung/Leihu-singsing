@@ -12,3 +12,6 @@ opencc-python-reimplemented>=0.1.7
 audio-separator[cpu]>=0.30
 yt-dlp
 imageio-ffmpeg
+
+# Wav2Vec2/CTC audio forced alignment
+transformers>=4.46,<5

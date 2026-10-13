@@ -187,7 +187,7 @@ function Remove-AppFiles($Plan, [bool]$KeepData) {
             Remove-SafeTree $path
         }
     }
-    $files=@('app.py','desktop.py','pipeline.py','share.py','ai_api.py','claude_api.py','ollama_setup.py','model_setup.py','installer.py',
+    $files=@('app.py','desktop.py','pipeline.py','share.py','ai_api.py','claude_api.py','forced_alignment.py','alignment_worker.py','ollama_setup.py','model_setup.py','installer.py',
              'VERSION','requirements.txt','requirements-win.txt','installed.json','ollama-install.json',
              '使用說明.html','版權與使用聲明.txt','uninstall.exe','clean-uninstall.exe')
     if (!$KeepData) { $files += @('config.json','usage.json','usage-local.json','usage-openai.json','usage-ai-choice.json') }

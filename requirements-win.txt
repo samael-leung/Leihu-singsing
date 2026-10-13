@@ -20,3 +20,6 @@ yt-dlp
 pywebview==6.2.1
 pythonnet==3.2.1
 pillow==11.3.0
+
+# Wav2Vec2/CTC audio forced alignment
+transformers>=4.46,<5

@@ -470,6 +470,7 @@ def clean_stale() -> None:
 
 
 CHECKS = [   # (名稱, 檢查程式, 壞掉時要重裝的套件)
+    ("音訊強制對齊", "from transformers import AutoProcessor, AutoModelForCTC; print('ok')", ["transformers"]),
     ("PyTorch", "import torch; print(torch.__version__, 'GPU' if torch.cuda.is_available() else 'CPU')", "torch"),
     ("torchvision", "import torch, torchvision; print(torchvision.__version__)", "torch"),
     ("人聲分離", "import torch, audio_separator.separator.architectures.mdx_separator as m, onnxruntime as o; "
