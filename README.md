@@ -14,12 +14,12 @@
 
 ## 本機模型分支（localModel）
 
-1. 安裝 [Ollama](https://ollama.com/download)，確認其服務正在執行。
-2. 執行 `ollama pull qwen2.5:14b`。模型約需 9GB 下載空間，建議 24GB 顯示記憶體；長上下文會增加記憶體需求。
+1. Windows 安裝程式會沿用現有 Ollama；若尚未安裝，會下載官方安裝檔、驗證 Windows 簽章後靜默安裝。
+2. 安裝與「修復與更新」會啟動 Ollama，自動下載設定中的模型（預設 `qwen2.5:14b`，約 9GB），並執行短回覆驗證。已有模型會重用，中斷可續傳；失敗時不會留下安裝完成標記。建議 24GB 顯示記憶體，長上下文會增加需求。
 3. 在練唱台「設定」確認 Ollama 網址 `http://127.0.0.1:11434` 與模型 `qwen2.5:14b`。服務未啟動或模型未下載時，狀態會顯示不可用。
 4. 歌詞對齊使用 Ollama JSON Schema，練習建議使用繁體中文文字回覆。請先用短歌詞測試；模型效果不保證與雲端模型相同。
 
-每次呼叫完成後以 `keep_alive: 0` 釋放模型，減少與 Whisper／UVR 搶 GPU 記憶體。呼叫最多等待 10 分鐘。本機 token 紀錄保存在 `usage-local.json`，API 費用為零，未包含電力與硬體成本。Windows 安裝檔不會自動安裝 Ollama。
+每次呼叫完成後以 `keep_alive: 0` 釋放模型，減少與 Whisper／UVR 搶 GPU 記憶體。呼叫最多等待 10 分鐘。本機 token 紀錄保存在 `usage-local.json`，API 費用為零，未包含電力與硬體成本。模型預設存在 `%USERPROFILE%\.ollama\models`，或你已設定的 `OLLAMA_MODELS` 目錄，不會複製進練唱台資料夾。Ollama 是共用的獨立程式；解除安裝練唱台會保留 Ollama 與模型。Ollama 安裝本體至少需約 4GB，另加 9GB 模型與原本音訊模型，請預留約 20GB 磁碟空間。Windows 需 10 22H2 以上，NVIDIA 建議驅動 551.61 以上。
 
 ## 從原始碼執行與測試
 
@@ -47,13 +47,16 @@ node tests/settings_smoke.js
 1. 下載內嵌版 Python 3.11（不影響電腦上原本的 Python）
 2. 偵測顯示卡，安裝對應的 PyTorch（CUDA 12.8／12.6 或 CPU 版）
 3. 下載分離與辨識模型（約 2 GB）
-4. 建立桌面與開始選單捷徑
+4. 安裝 Ollama 並下載本機語言模型（預設 Qwen2.5 14B，約 9 GB）
+5. 建立桌面與開始選單捷徑
 
-安裝視窗會顯示總進度和下載速度。第一次安裝需要連網，約 10–30 分鐘，之後可以離線使用。安裝中斷時重新執行安裝檔即可，會接著下載並自動修復不完整的檔案。詳細操作見 [使用說明](static/help.html)。
+安裝視窗會顯示總進度和下載速度。第一次安裝需要連網，依網速可能需要 30–90 分鐘，之後可以離線使用。安裝中斷時重新執行安裝檔即可，會接著下載並自動修復不完整的檔案。詳細操作見 [使用說明](static/help.html)。
 
-系統需求：Windows 10/11 64 位元、約 8 GB 磁碟空間；建議 NVIDIA 顯示卡（驅動支援 CUDA 12.6 以上）。
+系統需求：Windows 10 22H2／11 64 位元、建議預留約 20 GB 磁碟空間；建議 NVIDIA 顯示卡（驅動支援 CUDA 12.6 以上）。
 
 ## 從原始碼建置安裝檔
+
+從原始碼執行時，仍需自行安裝 [Ollama](https://ollama.com/download) 並執行 `ollama pull qwen2.5:14b`。程式在 Windows 啟動時會嘗試啟動已安裝的本機 Ollama；自訂遠端網址需自行提供服務。
 
 需要 [NSIS](https://nsis.sourceforge.io/)：
 
@@ -72,6 +75,7 @@ sh installer/build.sh
 | `pipeline.py` | 分軌、音高、歌詞辨識、線上歌詞搜尋、歌曲庫 |
 | `ai_api.py` | 呼叫本機 AI 並記錄 token 用量與費用 |
 | `share.py` | 錄音混音、匯出音訊、直式影片與成績卡 |
+| `ollama_setup.py` | 尋找／啟動 Ollama、續傳模型下載與載入檢查 |
 | `installer.py` | 安裝時偵測顯示卡、安裝套件、下載模型 |
 | `setup/install.ps1` | 安裝檔呼叫的 PowerShell 安裝腳本 |
 | `installer/leihu.nsi` | NSIS 安裝檔腳本 |

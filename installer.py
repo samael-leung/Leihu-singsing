@@ -8,7 +8,7 @@
   2. 偵測 NVIDIA 顯示卡，安裝相符的 PyTorch（CUDA 12.8／12.6 或 CPU 版）
   3. 安裝其餘套件，並固定 ONNX Runtime 1.22（CUDA 12）
   4. 清掉舊版殘留檔案，檢查每個元件都能正常載入
-  5. 預先下載 AI 模型
+  5. 預先下載音訊 AI 模型，安裝 Ollama 並下載本機語言模型
 紀錄寫在 logs\\install.log。
 """
 from __future__ import annotations
@@ -550,6 +550,48 @@ def launch() -> None:
                      creationflags=0x00000008 | 0x00000200)
 
 
+def prepare_ollama() -> bool:
+    """Reuse an existing service, otherwise install verified official Windows Ollama."""
+    import ollama_setup as O
+    import pipeline as P
+    cfg = P.load_config()
+    base = cfg.get("ollama_url") or "http://127.0.0.1:11434"
+    model = cfg.get("ollama_model") or "qwen2.5:14b"
+    try:
+        if not O.service_ready(base) and O.find_ollama() is None:
+            if not O.is_local(base):
+                raise RuntimeError("設定中的遠端 Ollama 無法連線；請啟動該服務後重試。")
+            if sys.platform != "win32":
+                raise RuntimeError("自動安裝 Ollama 僅支援 Windows。")
+            say("  下載官方 Ollama 安裝程式…")
+            setup = download("https://ollama.com/download/OllamaSetup.exe",
+                             DL / "OllamaSetup.exe", label="Ollama", part=(0, 0.15))
+            path = str(setup).replace("'", "''")
+            verified = powershell(
+                "$ErrorActionPreference='Stop'; "
+                f"$sig=Get-AuthenticodeSignature -LiteralPath '{path}'; "
+                "if ($sig.Status -ne 'Valid') { throw 'Ollama installer signature invalid' }; "
+                "Write-Output 'VERIFIED'")
+            if verified != "VERIFIED":
+                setup.unlink(missing_ok=True)
+                raise RuntimeError("Ollama 安裝檔簽章驗證失敗；請確認 Windows 信任設定與網路後重試。")
+            say("  靜默安裝 Ollama（目前使用者，不需要管理員權限）…")
+            if run([str(setup), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-"], quiet=False):
+                raise RuntimeError("Ollama 安裝失敗，請查看 logs/install.log。")
+            if O.find_ollama() is None:
+                raise RuntimeError("Ollama 安裝後找不到執行檔，請重新執行修復與更新。")
+        progress(0.15, "啟動 Ollama")
+        O.ensure_service(base, ROOT / "logs")
+        say(f"  準備本機模型 {model}（預設模型約 9 GB，中斷後可續傳）…")
+        O.prepare_model(base, model, lambda frac, detail: progress(0.15 + frac * 0.85, detail))
+        say(f"  ✓ Ollama 與 {model} 已準備好")
+        return True
+    except Exception as error:
+        say(f"  ✗ 本機模型安裝沒有完成：{error}")
+        LOG.write(repr(error) + "\n")
+        return False
+
+
 def main() -> int:
     repair = "--repair" in sys.argv
     version = (ROOT / "VERSION").read_text("utf-8").strip() if (ROOT / "VERSION").exists() else "?"
@@ -565,7 +607,7 @@ def main() -> int:
         say("  偵測到上次安裝沒有完成，這次會清除不完整的檔案並接著安裝（已下載好的部分不會重來）")
     # 安裝中先拿掉完成標記；中途被關掉時，下次就知道要修復
     done_file.unlink(missing_ok=True)
-    total = 6
+    total = 7
     stage(1, total, "準備", 0, 2)
     stop_app()
     clean_stale()
@@ -582,11 +624,15 @@ def main() -> int:
         say("\n套件安裝失敗。請確認網路連線後重新執行。")
         return 1
     clean_stale()
-    stage(4, total, "下載 AI 模型", 70, 94)
+    stage(4, total, "下載音訊 AI 模型", 70, 80)
     prefetch_models()
-    stage(5, total, "檢查", 94, 99)
+    stage(5, total, "安裝 Ollama 與本機語言模型", 80, 94)
+    if not prepare_ollama():
+        say("安裝未完成。請確認網路與磁碟空間後重新執行修復與更新，模型下載可續傳。")
+        return 1
+    stage(6, total, "檢查", 94, 99)
     ok = verify(tag)
-    stage(6, total, "完成", 99, 100)
+    stage(7, total, "完成", 99, 100)
     done_file.write_text(json.dumps(
         {"version": version, "torch": tag, "time": time.strftime("%Y-%m-%d %H:%M")}, ensure_ascii=False), "utf-8")
     shutil.rmtree(DL, ignore_errors=True)

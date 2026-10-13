@@ -767,6 +767,12 @@ def watch_parent() -> None:
 
 def main():
     P.LIB.mkdir(exist_ok=True)
+    if sys.platform == "win32":
+        import ollama_setup
+        try:
+            ollama_setup.ensure_service(P.load_config()["ollama_url"], P.ROOT / "logs")
+        except (RuntimeError, OSError, ValueError) as error:
+            print(f"  本機 AI 暫時無法使用：{error}")
     watch_parent()
     url = f"http://{HOST}:{PORT}"
     print(f"\n  {P.APP_NAME} {VERSION} 已啟動：{url}\n  關閉這個視窗就會結束程式。\n")

@@ -76,10 +76,10 @@ th { color: var(--muted); font-weight: 600; font-size: 13px; }
   <h2 id="req">系統需求</h2>
   <div class="tw"><table>
     <tr><th>項目</th><th>需求</th></tr>
-    <tr><td>作業系統</td><td>Windows 10 或 11（64 位元）</td></tr>
+    <tr><td>作業系統</td><td>Windows 10 22H2 或 11（64 位元）</td></tr>
     <tr><td>硬碟空間</td><td>有 NVIDIA 顯示卡約 7 GB；沒有約 4 GB。之後每首歌約 50–100 MB</td></tr>
     <tr><td>顯示卡</td><td>選配。有 NVIDIA 顯示卡（驅動程式要支援 CUDA 12.6 以上）時，處理速度會快很多；沒有也能用，只是比較慢</td></tr>
-    <tr><td>網路</td><td>安裝時需要（下載約 3–5 GB）。之後可以完全離線，YouTube 匯入與線上歌詞搜尋需要連網，本機 AI 在模型下載後可離線使用</td></tr>
+    <tr><td>網路</td><td>安裝時需要（下載包含約 9 GB 語言模型，建議預留 20 GB 磁碟空間）。之後可以完全離線，YouTube 匯入與線上歌詞搜尋需要連網，本機 AI 在模型下載後可離線使用</td></tr>
     <tr><td>其他</td><td>耳機與麥克風（錄音評分用）</td></tr>
   </table></div>
 
@@ -204,7 +204,7 @@ th { color: var(--muted); font-weight: 600; font-size: 13px; }
   </table></div>
 
   <h2 id="claude">本機 AI 功能與設定</h2>
-  <p>歌詞對齊與練習建議使用本機 Ollama，不需要 API 金鑰或雲端費用。安裝 Ollama 後執行 <code>ollama pull qwen2.5:14b</code>，啟動 Ollama，再在設定確認網址 <code>http://127.0.0.1:11434</code> 與模型名稱。</p><p>預設使用 Qwen2.5 14B 的量化模型，適合 24GB 顯示記憶體。每次完成呼叫後會釋放模型，方便其他音訊模型使用 GPU。模型下載需要網路；完成後 AI 建議可離線執行。Ollama 是另外安裝的程式，Windows 安裝檔不會自動安裝它。</p>
+  <p>歌詞對齊與練習建議使用本機 Ollama，不需要 API 金鑰或雲端費用。Windows 安裝程式會準備 Ollama 與模型；從原始碼執行時請自行安裝 Ollama 並執行 <code>ollama pull qwen2.5:14b</code>。在設定確認網址 <code>http://127.0.0.1:11434</code> 與模型名稱。</p><p>預設使用 Qwen2.5 14B 的量化模型，適合 24GB 顯示記憶體。每次完成呼叫後會釋放模型，方便其他音訊模型使用 GPU。模型下載需要網路；完成後 AI 建議可離線執行。Windows 安裝檔會自動安裝 Ollama 並下載設定中的模型；修復安裝可續傳。模型保存在 Ollama 共用目錄，解除安裝練唱台不會刪除它。</p>
 
   <h2 id="settings">設定</h2>
   <div class="tw"><table>
