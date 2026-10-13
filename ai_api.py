@@ -57,7 +57,7 @@ def summary():
               'session': _sum([c for c in calls if c['time'] >= SESSION_START]),
               'total': _sum(calls), 'recent': calls[-8:][::-1], 'balance': None}
     bal, since = cfg.get('balance_usd'), cfg.get('balance_set_at')
-    if provider(cfg) != 'ollama' and bal is not None and since:
+    if provider(cfg) != 'ollama' and cfg.get('balance_provider') == provider(cfg) and bal is not None and since:
         spent = _sum([c for c in calls if c['time'] >= since])['cost_usd']
         result['balance'] = {'entered_usd': float(bal), 'entered_at': since,
                              'spent_since_usd': spent,

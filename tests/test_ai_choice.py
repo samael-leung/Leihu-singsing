@@ -195,6 +195,15 @@ class ProviderChoiceTests(unittest.TestCase):
             self.assertEqual(A.summary()['total']['calls'], 1)
             self.assertEqual(A.summary()['last']['provider'], active)
 
+    def test_legacy_balance_is_not_assigned_to_another_provider(self):
+        cfg = self.configure('claude')
+        cfg.update(balance_usd=10, balance_set_at=1)
+        P.save_config(cfg)
+        self.assertIsNone(A.summary()['balance'])
+        cfg['balance_provider'] = 'openai'
+        P.save_config(cfg)
+        self.assertIsNone(A.summary()['balance'])
+
     def test_gemini_unsafe_model_name_does_not_make_a_request(self):
         cfg = self.configure('gemini')
         cfg['gemini_model'] = 'x?key=bad'
