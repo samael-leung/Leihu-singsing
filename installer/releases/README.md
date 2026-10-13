@@ -1,14 +1,10 @@
-# 本機模型版 1.4.4 Windows 下載
+# Windows AI 選擇版 1.4.4
 
-- [新版安裝檔](./LeihuLiantai-localModel-1.4.4-Setup.exe)
-- [一鍵完整移除工具](./LeihuLiantai-localModel-1.4.4-CleanUninstall.exe)
+- [安裝檔](./LeihuLiantai-windows-ai-choice-1.4.4-Setup.exe)
+- [完整移除工具](./LeihuLiantai-windows-ai-choice-1.4.4-CleanUninstall.exe)
 
-已合併上游 1.4.2／1.4.3／1.4.4：旋律辨識改良、更新舊歌曲旋律、旋律顯示開關、OBS 去背直播歌詞、可關閉失敗訊息、CUDA 實際運算檢查與相容版本／CPU 備援。預設 Ollama／Qwen2.5 14B 與完整移除功能保留。
+首次啟動可選本機 Ollama 或 Claude／Gemini／OpenAI API。API 模式不下載 Ollama 或語言模型。本機模式在儲存設定後依硬體選模、下載並驗證；也可指定模型。
 
-已有安裝：關閉程式，安裝到原資料夾並選「是：更新」，不必先解除安裝。歌曲、錄音、設定及已下載模型會保留。舊歌曲可按「更新旋律分析」，只重做旋律分析，不重新分軌。
+已有安裝請關閉程式，安裝到原資料夾並選更新，保留歌曲、錄音、設定及模型。完整移除預設保留資料，API-only 安裝不會清理其他程式的本機模型；曾使用本機模式時仍可清理已記錄的模型。
 
-完整移除預設保留歌曲與設定，可取消勾選一併清理。沒有其他模型時，可一併解除安裝 Ollama；其他模型、系統 Python 與顯示卡驅動會保留。舊版 1.4.1／1.4.3 檔案保留供回溯，建議使用新版。
-
-來源提交：`0d36106efc31fdf3c86e2335b809dfd48dad25af`。以 NSIS 3.11 建置，SHA-256 見 [SHA256SUMS](./SHA256SUMS)。音訊、API、直播歌詞與清理邏輯已驗證；Windows GUI、OBS 與實際 GPU 效果仍需實機測試。安裝檔未經程式碼簽章。
-
-介面修正：練習建議、長歌詞與英文長字串會在面板內換行，窄螢幕不會撐出水平捲動。既有 1.4.4 使用者請重新下載本頁安裝檔並更新到原資料夾。
+來源提交：`526b1bf7919ff24193a8f76dc45828a688a615be`。以 NSIS 3.11 建置，SHA-256 見 [SHA256SUMS](./SHA256SUMS)。供應商合約、設定介面、硬體選模及清理測試通過；Windows GUI／GPU、真實 API 帳戶仍需實機驗證。安裝檔未簽章。此目錄其他 localModel 檔案為歷史版本，請使用上方 AI 選擇版下載。
