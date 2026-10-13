@@ -14,7 +14,7 @@ from pathlib import Path
 import numpy as np
 import pipeline as P
 
-MODELS = {'zh': 'jonatasgrosman/wav2vec2-large-xlsr-53-chinese-zh-cn',
+MODELS = {'zh': 'ydshieh/wav2vec2-large-xlsr-53-chinese-zh-cn-gpt',
           'en': 'facebook/wav2vec2-base-960h'}
 UNITS = re.compile(r'[\u3400-\u9fff\uf900-\ufaff]|[^\s\u3400-\u9fff\uf900-\ufaff]+')
 
@@ -37,7 +37,10 @@ def transcript(text, vocab, language, delimiter='|'):
                 if not character.isalnum():
                     continue
                 normalized = converter.convert(character) if converter else character
-                label = next((vocab[c] for c in (normalized, normalized.upper(), normalized.lower()) if c in vocab), None)
+                # Training text uses simplified Chinese; keep traditional display and
+                # try the original glyph if its normalized form is absent.
+                candidates = (normalized, normalized.upper(), normalized.lower(), character)
+                label = next((vocab[c] for c in candidates if c in vocab), None)
                 if label is None:
                     missing.append(character)
                 else:
@@ -53,7 +56,10 @@ def transcript(text, vocab, language, delimiter='|'):
     while owners and owners[-1] is None:
         labels.pop(); owners.pop()
     if missing:
-        raise P.UserError('對齊模型不支援這些字元：' + ''.join(dict.fromkeys(missing))[:30] + '。數字請改成實際唱出的文字，並確認語言。')
+        characters = ''.join(dict.fromkeys(missing))[:30]
+        advice = ('數字請改成實際唱出的文字。' if any(c.isdigit() for c in missing) else '')
+        advice += '請確認所選語言；若是正確的中文歌詞，表示模型字典仍未涵蓋這些字，不需要改寫原歌詞。' if language == 'zh' else '請確認所選語言；中文歌詞請選中文普通話。'
+        raise P.UserError('對齊模型不支援這些字元：' + characters + '。' + advice)
     return lines, labels, owners
 
 

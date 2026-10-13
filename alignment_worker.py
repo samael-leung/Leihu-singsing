@@ -45,16 +45,27 @@ def report(step, progress):
 def align(payload):
     import torch
     try:
-        from transformers import AutoModelForCTC, AutoProcessor
+        from transformers import AutoModelForCTC, AutoFeatureExtractor
     except ImportError as error:
         raise P.UserError('請先更新套件：重新執行 Mac 安裝腳本，或安裝新版 Windows 安裝檔。') from error
     language = payload['language']
     report('載入強制對齊模型（第一次需連網下載）', .05)
     model_name = payload.get('model') or F.MODELS[language]
-    processor = AutoProcessor.from_pretrained(model_name, cache_dir=payload['cache'])
-    model = AutoModelForCTC.from_pretrained(model_name, cache_dir=payload['cache']).to('cpu').eval()
-    lines, labels, owners = F.transcript(payload['text'], processor.tokenizer.get_vocab(), language,
-                                        processor.tokenizer.word_delimiter_token or '|')
+    # CTC alignment only needs the audio extractor and character IDs. Constructing
+    # a tokenizer for this 21k-entry vocabulary needlessly builds thousands of
+    # word tokens and takes several minutes in recent Transformers versions.
+    extractor = AutoFeatureExtractor.from_pretrained(model_name, cache_dir=payload['cache'])
+    if Path(model_name).is_dir():
+        vocab_file = Path(model_name) / 'vocab.json'
+    else:
+        from huggingface_hub import hf_hub_download
+        vocab_file = Path(hf_hub_download(model_name, 'vocab.json', cache_dir=payload['cache']))
+    vocab = json.loads(vocab_file.read_text('utf-8'))
+    lines, labels, owners = F.transcript(payload['text'], vocab, language)
+    # The broad Chinese model publishes PyTorch weights only; avoid Transformers'
+    # background safetensors conversion, which can delay worker exit.
+    options = {'use_safetensors': False} if model_name == F.MODELS['zh'] else {}
+    model = AutoModelForCTC.from_pretrained(model_name, cache_dir=payload['cache'], **options).to('cpu').eval()
     blank = model.config.pad_token_id
     unique = sorted(set(labels) | {blank})
     reduced = {token: index for index, token in enumerate(unique)}
@@ -65,9 +76,9 @@ def align(payload):
     for start in range(0, len(audio), 20 * 16000):
         end = min(len(audio), start + 20 * 16000)
         left, right = max(0, start - 16000), min(len(audio), end + 16000)
-        values = processor(audio[left:right], sampling_rate=16000, return_tensors='pt').input_values
+        values = extractor(audio[left:right], sampling_rate=16000, return_tensors='pt')
         with torch.inference_mode():
-            logits = model(values).logits[0]
+            logits = model(**values).logits[0]
             probabilities = logits.log_softmax(-1)[:, unique].cpu().numpy()
         boundaries = np.linspace(left / 16000, right / 16000, len(probabilities) + 1)
         centers = (boundaries[:-1] + boundaries[1:]) / 2

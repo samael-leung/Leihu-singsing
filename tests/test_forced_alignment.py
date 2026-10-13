@@ -51,6 +51,27 @@ class CtcTests(unittest.TestCase):
         self.assertIn('，', lrc)
         self.assertEqual(P.parse_lrc(lrc)[0]['text'], '愛你，')
 
+    def test_chinese_model_covers_reported_lyric_characters(self):
+        self.assertEqual(F.MODELS['zh'], 'ydshieh/wav2vec2-large-xlsr-53-chinese-zh-cn-gpt')
+        # IDs from this model's published vocab.json; these are absent in the old model.
+        vocab = {'眠': 4697, '徘': 2534, '徊': 2525, '爱': 4263, '[PAD]': 0}
+        lines, labels, owners = F.transcript('愛眠徘徊', vocab, 'zh')
+        self.assertEqual(labels, [4263, 4697, 2534, 2525])
+        self.assertEqual(owners, [(0, i) for i in range(4)])
+        out = F.aligned_lines(lines, owners, [(1, 2, .9), (3, 4, .9), (5, 6, .9), (7, 8, .9)], np.arange(11) / 10, 1)
+        self.assertEqual(P.parse_lrc(F.enhanced_lrc(out))[0]['text'], '愛眠徘徊')
+
+    def test_original_traditional_glyph_is_used_when_normalized_glyph_is_missing(self):
+        lines, labels, owners = F.transcript('愛臺灣鬱體', {'愛': 2695, '臺': 5637, '灣': 4124, '鬱': 7786, '體': 7768}, 'zh')
+        self.assertEqual(labels, [2695, 5637, 4124, 7786, 7768])
+        self.assertEqual(lines[0]['text'], '愛臺灣鬱體')
+
+    def test_missing_chinese_character_is_not_misreported_as_a_number(self):
+        with self.assertRaises(P.UserError) as error:
+            F.transcript('愛龘', {'爱': 1}, 'zh')
+        self.assertIn('模型字典仍未涵蓋', str(error.exception))
+        self.assertNotIn('數字請改', str(error.exception))
+
     def test_unsupported_characters_are_not_silently_omitted(self):
         with self.assertRaisesRegex(P.UserError, '不支援'):
             F.transcript('愛你5', {'爱': 1, '你': 2}, 'zh')
