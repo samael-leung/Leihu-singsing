@@ -16,6 +16,7 @@ from pathlib import Path
 from flask import Flask, abort, jsonify, request, send_file, send_from_directory
 
 import ai_api as C
+import model_setup as MS
 import pipeline as P
 import share as SH
 
@@ -43,7 +44,7 @@ def index():
 def status():
     mods = P.module_status()
     return jsonify(version=VERSION, root=str(P.ROOT), modules=mods, cuda_note=P.CUDA_NOTE,
-                   ai_ready=C.ready(), ai_provider=C.PROVIDER,
+                   ai_ready=C.ready(), ai_provider=C.provider(),
                    session_cost=C.summary()["session"]["cost_usd"],
                    jobs=jobs.active() + vjobs.active())
 
@@ -51,9 +52,11 @@ def status():
 @app.get("/api/config")
 def get_config():
     cfg = P.load_config()
-    cfg.pop("anthropic_api_key", None)  # Never expose a legacy key.
-    cfg.pop("openai_api_key", None)  # A different branch may have saved this key.
-    cfg["has_key"] = False
+    cfg['has_keys'] = {name: bool(cfg.get(field) or os.environ.get(env))
+                       for name, (field, env) in C.KEYS.items()}
+    for field, _ in C.KEYS.values():
+        cfg.pop(field, None)
+    cfg['has_key'] = cfg['ai_mode'] == 'api' and cfg['has_keys'].get(cfg.get('api_provider'), False)
     return jsonify(cfg)
 
 
@@ -61,21 +64,73 @@ def get_config():
 def set_config():
     body = request.get_json(force=True) or {}
     cfg = P.load_config()
-    for k in P.DEFAULT_CONFIG:
-        if k not in body:
+    for key in P.DEFAULT_CONFIG:
+        if key not in body:
             continue
-        if k == "balance_usd":
-            v = body[k]
-            v = None if v in (None, "") else round(float(v), 2)
-            if v != cfg.get("balance_usd"):
-                cfg["balance_usd"], cfg["balance_set_at"] = v, (time.time() if v is not None else None)
+        value = body[key]
+        if key.endswith('_api_key'):
+            if not isinstance(value, str):
+                raise P.UserError('API 金鑰必須是文字。')
+            if not value.strip() or '…' in value:
+                continue
+            value = value.strip()
+        if key == 'balance_set_at':
             continue
-        if k == "balance_set_at":
-            continue
-        else:
-            cfg[k] = body[k]
+        if key in ('ai_input_price', 'ai_output_price', 'balance_usd'):
+            try:
+                value = None if value in (None, '') else float(value)
+                if value is not None and (not math.isfinite(value) or value < 0):
+                    raise ValueError()
+            except (ValueError, TypeError):
+                raise P.UserError('價格與餘額必須是有限的非負數字。')
+        cfg[key] = value
+    clear = body.get('clear_api_key')
+    if clear:
+        if clear not in C.KEYS:
+            raise P.UserError('未知的 API 供應商。')
+        cfg[C.KEYS[clear][0]] = ''
+    if cfg['ai_mode'] not in ('local', 'api') or cfg['api_provider'] not in C.API_PROVIDERS:
+        raise P.UserError('請選擇有效的 AI 模式與供應商。')
+    if cfg['ai_mode'] == 'api' and cfg['ai_setup_complete'] and not clear and not C._key(cfg, cfg['api_provider']):
+        raise P.UserError('請輸入選定供應商的 API 金鑰，或設定對應環境變數。')
+    for key in ('ai_setup_complete', 'ollama_auto_model'):
+        if not isinstance(cfg[key], bool):
+            raise P.UserError('AI 開關設定必須是布林值。')
+    if not isinstance(cfg['ollama_model'], str) or not cfg['ollama_model'].strip():
+        raise P.UserError('請輸入本機模型名稱。')
+    if cfg['ai_mode'] == 'local' and cfg['ollama_auto_model'] and any(
+            key in body for key in ('ai_mode', 'ollama_auto_model', 'ollama_model', 'ollama_url')):
+        if not MS.O.is_local(cfg['ollama_url']):
+            raise P.UserError('遠端 Ollama 請關閉自動選模，並指定遠端可用的模型。')
+        rec = MS.recommend()
+        cfg['ollama_model'], cfg['ollama_num_ctx'] = rec['model'], rec['num_ctx']
+    try:
+        ctx = int(cfg['ollama_num_ctx'])
+        if not 1024 <= ctx <= 32768:
+            raise ValueError()
+        cfg['ollama_num_ctx'] = ctx
+    except (ValueError, TypeError):
+        raise P.UserError('本機上下文長度必須介於 1024 和 32768。')
+    if cfg['ai_mode'] == 'local':
+        C._settings(cfg)  # Validate URL before persisting anything.
     P.save_config(cfg)
     return get_config()
+
+
+@app.get('/api/ai/hardware')
+def ai_hardware():
+    return jsonify(MS.recommend())
+
+
+@app.post('/api/ai/prepare')
+def ai_prepare():
+    cfg = P.load_config()
+    if cfg['ai_mode'] != 'local':
+        raise P.UserError('API 模式不需要安裝本機語言模型。')
+    label = cfg['ollama_url'] + '|' + cfg['ollama_model']
+    existing = jobs.find('ai_setup', '', label)
+    jid = existing or jobs.submit('ai_setup', '', lambda report: MS.prepare(cfg, report), label=label)
+    return jsonify(job=jid, model=cfg['ollama_model'])
 
 
 # ---------------------------------------------------------------- 歌曲庫
@@ -453,7 +508,7 @@ def delete_take(sid, tid):
     return jsonify(ok=True)
 
 
-# ---------------------------------------------------------------- 本機 AI（Ollama）
+# ---------------------------------------------------------------- AI（本機／API）
 
 ALIGN_TOOL = {
     "name": "set_line_times",
@@ -509,7 +564,7 @@ def ai_align(sid):
     data, usage = C.ask_tool(prompt, tool, 8000, "align", meta.get("title", ""))
     times = data.get("times") or []
     if len(times) != n:
-        raise P.UserError(f"本機 AI 回傳了 {len(times)} 個時間，但歌詞有 {n} 行。再試一次。")
+        raise P.UserError(f"AI 回傳了 {len(times)} 個時間，但歌詞有 {n} 行。再試一次。")
     dur = float(meta.get("duration") or 1e9)
     if any(isinstance(t, bool) or not isinstance(t, (int, float))
            or not math.isfinite(t) or t < 0 or t > dur for t in times):
@@ -520,7 +575,7 @@ def ai_align(sid):
     lrc = P.to_lrc([{"t": t, "text": txt} for t, txt in zip(clean, ref_lines)])
     (d / "lyrics.lrc").write_text(lrc, "utf-8")
     meta["steps"]["lyrics"] = True
-    meta["lyrics_source"] = C.PROVIDER
+    meta["lyrics_source"] = usage.get("provider", C.provider())
     P.write_meta(d, meta)
     return jsonify(lrc=lrc, usage=usage)
 
@@ -819,7 +874,8 @@ def watch_parent() -> None:
 
 def main():
     P.LIB.mkdir(exist_ok=True)
-    if sys.platform == "win32":
+    if (sys.platform in ("win32", "darwin") and
+            P.load_config().get("ai_setup_complete") and C.provider() == "ollama"):
         import ollama_setup
         try:
             ollama_setup.ensure_service(P.load_config()["ollama_url"], P.ROOT / "logs")

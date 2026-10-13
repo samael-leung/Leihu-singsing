@@ -16,7 +16,7 @@ class CleanupTests(unittest.TestCase):
             result = subprocess.run([PWSH, '-NoProfile', '-File', str(Path(__file__).with_name('cleanup_smoke.ps1')),
                                      '-Workspace', workspace], capture_output=True, text=True, timeout=60)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn('Cleanup functional checks passed: 22', result.stdout)
+        self.assertIn('Cleanup functional checks passed: 26', result.stdout)
 
 
 if __name__ == '__main__':

@@ -59,6 +59,8 @@ def wait_ready(base: str, proc: subprocess.Popen, timeout: float = 90) -> None:
 
 def allow_microphone(window, base_url: str, done: list) -> None:
     """自動允許本程式頁面使用麥克風；失敗時退回 WebView2 預設的詢問視窗。"""
+    if sys.platform != "win32":
+        return  # macOS 由系統與 WebKit 管理權限；錄音建議使用瀏覽器版
     if done:
         return
     done.append(True)
@@ -153,9 +155,12 @@ if __name__ == "__main__":
     except Exception:
         traceback.print_exc()
         try:
-            import ctypes
-            ctypes.windll.user32.MessageBoxW(
-                0, "雷虎練唱台無法啟動，詳細原因記錄在安裝資料夾 logs 裡的 desktop.log 與 app.log。", "雷虎練唱台", 0x10)
+            message = "雷虎練唱台無法啟動，詳細原因記錄在安裝資料夾 logs 裡的 desktop.log 與 app.log。"
+            if sys.platform == "win32":
+                import ctypes
+                ctypes.windll.user32.MessageBoxW(0, message, "雷虎練唱台", 0x10)
+            elif sys.platform == "darwin":
+                subprocess.run(["osascript", "-e", 'display alert "雷虎練唱台" message "' + message + '"'], check=False)
         except Exception:
             pass
         os._exit(1)

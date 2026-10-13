@@ -65,11 +65,11 @@ th { color: var(--muted); font-weight: 600; font-size: 13px; }
       <li>本工具使用的開源套件與 AI 模型，各依其授權條款使用。</li>
     </ol>
   </section>
-  <p class="lede">在自己電腦上練歌的工具：把歌曲拆成主唱、合音、伴奏，畫出主唱旋律，辨識歌詞，讓你調 KEY、放慢速度，邊唱邊看自己的音準。所有處理都在電腦上完成，兩個選用 AI 功能使用另外安裝的本機 Ollama。</p>
+  <p class="lede">在自己電腦上練歌的工具：把歌曲拆成主唱、合音、伴奏，畫出主唱旋律，辨識歌詞，讓你調 KEY、放慢速度，邊唱邊看自己的音準。所有處理都在電腦上完成，兩個選用 AI 功能可在設定選擇本機 Ollama，或 Claude、Gemini、OpenAI API。</p>
 
   <nav class="toc" aria-label="目錄">
     <a href="#copyright">版權與使用聲明</a><a href="#req">系統需求</a><a href="#install">安裝</a><a href="#import">匯入歌曲</a><a href="#practice">練唱畫面</a>
-    <a href="#record">錄音評分</a><a href="#share">匯出與分享</a><a href="#lyrics">歌詞</a><a href="#claude">本機 AI 與費用</a><a href="#settings">設定</a>
+    <a href="#record">錄音評分</a><a href="#share">匯出與分享</a><a href="#lyrics">歌詞</a><a href="#claude">AI 模式與費用</a><a href="#settings">設定</a>
     <a href="#faq">常見問題</a><a href="#uninstall">解除安裝</a><a href="#changes">版本紀錄</a>
   </nav>
 
@@ -79,7 +79,7 @@ th { color: var(--muted); font-weight: 600; font-size: 13px; }
     <tr><td>作業系統</td><td>Windows 10 22H2 或 11（64 位元）</td></tr>
     <tr><td>硬碟空間</td><td>有 NVIDIA 顯示卡約 7 GB；沒有約 4 GB。之後每首歌約 50–100 MB</td></tr>
     <tr><td>顯示卡</td><td>選配。有 NVIDIA 顯示卡（驅動程式要支援 CUDA 12.6 以上）時，處理速度會快很多；沒有也能用，只是比較慢</td></tr>
-    <tr><td>網路</td><td>安裝時需要（下載包含約 9 GB 語言模型，建議預留 20 GB 磁碟空間）。之後可以完全離線，YouTube 匯入與線上歌詞搜尋需要連網，本機 AI 在模型下載後可離線使用</td></tr>
+    <tr><td>網路</td><td>安裝時需要；選擇本機模式後才會下載語言模型，空間需求依模型大小而定。之後可以完全離線，YouTube 匯入與線上歌詞搜尋需要連網，本機 AI 在模型下載後可離線使用</td></tr>
     <tr><td>其他</td><td>耳機與麥克風（錄音評分用）</td></tr>
   </table></div>
 
@@ -197,7 +197,7 @@ th { color: var(--muted); font-weight: 600; font-size: 13px; }
     <li><b>直接修改</b>：在文字框改好後按「儲存歌詞」。</li>
     <li><b>匯入歌詞檔</b>：按「匯入歌詞檔」選 LRC、SRT 或 TXT 檔。有時間的直接使用；純文字（每行一句）會依自動辨識的時間對上每一句。UTF-8、Big5（繁體）、GBK（簡體）編碼都能讀，簡體會自動轉成台灣繁體。</li>
     <li><b>跟拍打點</b>：先把正確歌詞貼進文字框（每行一句，不用時間），按「跟拍打點」，播放時每唱到新的一句就按 <kbd>空白鍵</kbd>。</li>
-    <li><b>用本機 AI 對齊</b>：展開「貼上正確歌詞」，貼上歌詞後按「用本機 AI 對齊」，本機 AI 會參考辨識結果和旋律自動填上每句的時間，並依旋律把每個字放到對應的音上（需啟動 Ollama，見下一節）。</li>
+    <li><b>用 AI 對齊</b>：展開「貼上正確歌詞」，貼上歌詞後按「用 AI 對齊」，選定的 AI 會參考辨識結果和旋律自動填上每句的時間，並依旋律把每個字放到對應的音上（本機模式需準備 Ollama；API 模式需金鑰，見下一節）。</li>
     <li><b>逐句調整開始時間</b>：每一句都有時間欄位。播放到某句開頭時按「對準」，或用 −／＋ 每次調 0.1 秒，也可以直接輸入時間。按 ▶ 會從那句前 1 秒開始播放。</li>
     <li><b>自動分配每個字的時間</b>：已有每句時間的歌詞，可以一鍵依旋律音符分配每個字的時間，再用「調整」微調。</li>
     <li><b>線上歌詞比對</b>：匯入歌曲時，程式會用歌名（原文和轉成簡體各一次）到 LRCLIB、網易雲音樂和酷狗音樂搜尋，並和自動辨識的結果比對相似度。找到相似的版本時，歌詞面板會列出每一版的歌名、歌手、相似度、有沒有時間軸和開頭幾句，讓你選一版使用；都不像或沒找到，就維持辨識結果。</li>
@@ -214,13 +214,15 @@ th { color: var(--muted); font-weight: 600; font-size: 13px; }
     <tr><td>TXT</td><td>只要文字，沒有時間</td></tr>
   </table></div>
 
-  <h2 id="claude">本機 AI 功能與設定</h2>
-  <p>歌詞對齊與練習建議使用本機 Ollama，不需要 API 金鑰或雲端費用。Windows 安裝程式會準備 Ollama 與模型；從原始碼執行時請自行安裝 Ollama 並執行 <code>ollama pull qwen2.5:14b</code>。在設定確認網址 <code>http://127.0.0.1:11434</code> 與模型名稱。</p><p>預設使用 Qwen2.5 14B 的量化模型，適合 24GB 顯示記憶體。每次完成呼叫後會釋放模型，方便其他音訊模型使用 GPU。模型下載需要網路；完成後 AI 建議可離線執行。Windows 安裝檔會自動安裝 Ollama 並下載設定中的模型；修復安裝可續傳。模型保存在 Ollama 共用目錄，一般解除安裝會保留共用模型；桌面與開始選單的「完整移除」工具可清理練唱台模型。確認視窗預設保留歌曲與設定，可取消勾選一併刪除。只有沒有其他模型時，才可一併解除安裝 Ollama。</p>
+  <h2 id="claude">AI 模式與供應商</h2>
+  <p>首次啟動到「設定」選擇本機模型或 API。API 可選 Claude、Gemini、OpenAI，分別儲存模型名稱與金鑰；切換不會覆寫其他供應商的金鑰，留空保留原值。網頁版訂閱不等於 API 額度。使用 API 時歌詞與分析會傳給所選供應商，可能產生費用。</p>
+  <p>本機模式按儲存後，才會安裝或沿用 Ollama，依硬體選擇 Qwen2.5 並自動下載；重新儲存可續傳。Windows 依可用顯示記憶體與 RAM 選模，Apple Silicon 依共享記憶體選模。可取消自動選擇並輸入自訂模型；遠端 Ollama 請使用手動選模。M2 Pro／32 GB 建議 7B；24 GB 可用 VRAM 與足夠 RAM 建議 14B。較小模型的對齊品質需自行確認。</p>
+  <p>本機推論無 API 費用，每次回覆後釋放模型記憶體。API 的金額未定價時顯示「—」，請以供應商帳單為準。金鑰存在安裝資料夾的 config.json，介面不會傳回金鑰內容。Ollama 模型通常位於共用快取，刪除專案不會自動刪除它們。</p>
 
   <h2 id="settings">設定</h2>
   <div class="tw"><table>
     <tr><th>項目</th><th>說明</th></tr>
-    <tr><td>本機 AI 模型</td><td>預設 <code>qwen2.5:14b</code>，可於設定更改。</td></tr>
+    <tr><td>本機 AI 模型</td><td>依硬體自動選擇，也可在設定指定其他模型。</td></tr>
     <tr><td>歌詞辨識模型</td><td>large-v3-turbo 是速度和準確度的平衡；large-v3 最準但最慢；small 最快</td></tr>
     <tr><td>歌詞語言</td><td>預設中文。英文、日文、韓文歌請改成對應語言或「自動判斷」</td></tr>
     <tr><td>轉成台灣繁體用字</td><td>辨識出的中文自動轉成台灣慣用字詞</td></tr>

@@ -11,99 +11,62 @@
 - 把你的錄音和合音、伴奏混音後**匯出 MP3／WAV、直式影片（旋律線條＋歌詞）或成績卡圖片**，一鍵開啟 FB、IG、X、Threads 分享
 - 歌曲庫可自訂分類（例如中文歌、日文歌）並用關鍵字搜尋
 
-歌曲處理都在本機完成（有 NVIDIA 顯示卡時用 GPU 加速）。「AI 精準對齊歌詞」與「練習建議」改由本機 Ollama 執行，無需 API 金鑰或雲端模型費用。
+歌曲與錄音處理在本機執行。首次啟動會開啟設定，讓使用者選擇 **本機模型** 或 **API**；API 可選 **Claude、Gemini、OpenAI**，之後隨時可以切換。
 
-## 本機模型分支（localModel）
+## Windows 安裝（windows-ai-choice）
 
-1. Windows 安裝程式會沿用現有 Ollama；若尚未安裝，會下載官方安裝檔、驗證 Windows 簽章後靜默安裝。
-2. 安裝與「修復與更新」會啟動 Ollama，自動下載設定中的模型（預設 `qwen2.5:14b`，約 9GB），並執行短回覆驗證。已有模型會重用，中斷可續傳；失敗時不會留下安裝完成標記。建議 24GB 顯示記憶體，長上下文會增加需求。
-3. 在練唱台「設定」確認 Ollama 網址 `http://127.0.0.1:11434` 與模型 `qwen2.5:14b`。服務未啟動或模型未下載時，狀態會顯示不可用。
-4. 歌詞對齊使用 Ollama JSON Schema，練習建議使用繁體中文文字回覆。請先用短歌詞測試；模型效果不保證與雲端模型相同。
+到 [installer/releases](installer/releases) 下載 `LeihuLiantai-windows-ai-choice-1.4.4-Setup.exe`。安裝到可寫入的資料夾，首次開啟後選擇 AI 模式。安裝程式先準備 Python、音訊套件及 UVR／Whisper；這一步不會下載 Ollama 或本機語言模型。已有安裝請關閉程式，安裝到原位置並選「更新」，保留歌曲、錄音與設定。
 
-每次呼叫完成後以 `keep_alive: 0` 釋放模型，減少與 Whisper／UVR 搶 GPU 記憶體。呼叫最多等待 10 分鐘。本機 token 紀錄保存在 `usage-local.json`，API 費用為零，未包含電力與硬體成本。模型預設存在 `%USERPROFILE%\.ollama\models`，或你已設定的 `OLLAMA_MODELS` 目錄，不會複製進練唱台資料夾。Ollama 是共用的獨立程式；一般解除安裝會保留 Ollama 與模型；新版「完整移除」工具可一併清理，見下方說明。Ollama 安裝本體至少需約 4GB，另加 9GB 模型與原本音訊模型，請預留約 20GB 磁碟空間。Windows 需 10 22H2 以上，NVIDIA 建議驅動 551.61 以上。
+本機模式按「儲存」後才會沿用或安裝 Ollama、自動選模、下載並驗證回覆。下載中斷可再次儲存續傳。Ollama 官方 Windows 安裝檔會驗證 Authenticode 簽章，不會繞過驗證。API 模式不需要 Ollama，也不會下載本機語言模型。
 
-## 更新至 1.4.4
+Windows 10 22H2／11 64 位元，音訊套件建議預留約 8 GB，選本機模式時另外預留模型與 Ollama 空間（依模型約 2–13 GB）。NVIDIA 的音訊加速依驅動與 PyTorch 相容性決定，會測試運算並在必要時退回 CPU。
 
-此分支已合併上游 1.4.2／1.4.3／1.4.4：旋律辨識補斷點與修正八度、舊歌曲「更新旋律分析」、旋律顯示開關、OBS 去背直播歌詞。新增可關閉失敗訊息，以及實際測試 CUDA 運算、必要時退回相容版本或 CPU 的功能。模型設定與完整移除工具保留。
+## AI 模式與設定
 
-已有安裝：關閉程式，以本分支新版安裝檔安裝到原位置，選「是：更新」。不用先解除安裝；歌曲、錄音、設定及已下載模型會保留。舊歌曲可按「更新旋律分析」，只重做旋律，不會重新分軌或改動歌詞、錄音。
+1. **本機模型**：保留「依硬體自動選擇模型」，按儲存開始準備。介面會顯示偵測結果、建議模型及下載進度。可取消自動選擇，輸入自己的 Ollama 模型名稱。遠端 Ollama 請使用手動選模，因為本程式只能偵測本機硬體。
+2. **API**：選 Claude／Gemini／OpenAI，確認模型名稱，輸入該供應商的 API 金鑰，再儲存。三家帳戶與模型設定會分別保留；切換供應商不會覆寫其他金鑰。留空保留已存金鑰，「清除目前供應商」只清除該家的已存金鑰。
+3. API 也支援 `ANTHROPIC_API_KEY`、`GEMINI_API_KEY`、`OPENAI_API_KEY` 環境變數。金鑰存在安裝資料夾的 `config.json`，介面只回傳是否已設定，不會傳回金鑰內容。不要上傳設定檔。
 
-練習建議的輸出上限提高至 3,000 tokens；只有回覆被截斷時，才以 12,000 tokens 上限重試一次。OpenAI 版會記錄兩次實際用量與費用，本機版沒有 API 費用。第二次仍被截斷時會顯示錯誤，不會儲存不完整的建議。
+預設 API 模型為 `claude-sonnet-4-6`、`gemini-2.5-flash`、`gpt-4.1-mini`；可改成帳戶可使用且支援所需結構化輸出的模型。歌詞對齊分別使用 Claude 工具回傳、Gemini JSON Schema、OpenAI 嚴格 JSON Schema；回覆仍會檢查行數、時間遞增與歌曲長度，無效資料不會覆蓋歌詞。
 
-OBS 使用者可在練唱畫面按「直播歌詞」，複製網址到 OBS 的「瀏覽器」來源；練唱台要保持開著。
+API 會把歌詞／練習分析傳給所選供應商，可能產生 API 費用；網頁版訂閱不等於 API 額度。本機推論無 API 費用，模型下載後可離線；YouTube 匯入和線上歌詞搜尋仍需網路。
 
-## 從原始碼執行與測試
+### 本機模型選擇
 
-Linux 後端使用 `requirements.txt`；Windows 桌面版使用 `requirements-win.txt` 並由原安裝流程處理 PyTorch。
+| 硬體 | 自動選擇 | 上下文 |
+| --- | --- | --- |
+| NVIDIA 目前可用顯示記憶體 ≥20 GB，RAM ≥16 GB | Qwen2.5 14B | 16,384 tokens |
+| NVIDIA 目前可用顯示記憶體 ≥10 GB，RAM ≥12 GB | Qwen2.5 7B | 8,192 tokens |
+| NVIDIA 目前可用顯示記憶體 ≥5 GB | Qwen2.5 3B | 4,096 tokens |
+| NVIDIA 剩餘顯示記憶體較少 | Qwen2.5 1.5B | 4,096 tokens |
+| Apple Silicon 共享記憶體 ≥48 GB | Qwen2.5 14B | 8,192 tokens |
+| Apple Silicon 共享記憶體 ≥16 GB | Qwen2.5 7B | 8,192 tokens |
+| Apple Silicon 共享記憶體 <16 GB | Qwen2.5 3B | 4,096 tokens |
+| 未偵測到 NVIDIA，RAM ≥16 GB／不足或未知 | Qwen2.5 3B／1.5B | 4,096 tokens |
+
+你的 RTX 3080／24 GB VRAM、96 GB RAM 在顯示記憶體空間足夠時會選 14B；M2 Pro Mac mini／32 GB RAM 會選 7B。這是保留音訊處理空間的建議，並非速度或品質保證；3B／1.5B 的複雜歌詞對齊效果可能較弱，可以改用較大模型或 API。AMD／Intel 顯示卡目前使用 RAM 的保守建議，實際加速由 Ollama 管理。
+
+每次 AI 回覆後以 `keep_alive: 0` 釋放語言模型。練習建議被截斷時最多加大長度上限重試一次；兩次用量都記錄。結構化對齊不會自動重試。紀錄存在 `usage-ai-choice.json`，用量畫面依目前供應商分開顯示。API 未設定價格時顯示「—」，以供應商帳單為準；若在設定檔指定 `ai_price_provider`、`ai_price_model`、每百萬 token 的 `ai_input_price`／`ai_output_price`，可估算費用，但快取與特殊計價仍需核對官方帳單。
+
+## 更新與移除
+
+原始碼版在目前分支執行 `git pull --ff-only`。Windows 安裝版重新下載此分支的安裝檔，更新到原資料夾。此分支包含上游 1.4.4、直播歌詞與面板換行修正；舊歌曲可按「更新旋律分析」，不用重新分軌。
+
+Windows「完整移除」預設保留歌曲與設定，可選擇清除。只清理本程式記錄或設定的 Ollama 模型；其他模型、系統 Python 與驅動會保留。沒有其他模型時才可選擇一併解除安裝 Ollama。即使改用 API，之前下載的本機模型仍可由完整移除工具清理。
+
+## 開發與驗證
 
 ```sh
 python -m venv .venv
 # 啟用虛擬環境後：
 python -m pip install -r requirements.txt
+python -m unittest discover -s tests -v
+node tests/settings_smoke.js
+node tests/overlay_smoke.js
 python app.py --no-browser
 ```
 
-```sh
-python -m unittest discover -s tests -v
-# 若環境有 Node.js，可驗證前端設定操作：
-node tests/settings_smoke.js
-node tests/overlay_smoke.js
-```
-
-測試以模擬服務驗證請求格式、錯誤、用量、設定金鑰遮罩及 Flask 對齊／建議流程，不需付費金鑰或下載大型模型。實際 AI 品質仍需在安裝模型或提供 API 金鑰後檢驗。
-
-## 安裝
-
-到 [Releases](../../releases) 下載最新版的 `LeihuLiantai-<版本>-Setup.exe`（雷虎練唱台安裝檔），雙擊安裝。安裝程式會自動：
-
-1. 下載內嵌版 Python 3.11（不影響電腦上原本的 Python）
-2. 偵測顯示卡，安裝對應的 PyTorch（CUDA 12.8／12.6 或 CPU 版）
-3. 下載分離與辨識模型（約 2 GB）
-4. 安裝 Ollama 並下載本機語言模型（預設 Qwen2.5 14B，約 9 GB）
-5. 建立桌面與開始選單捷徑
-
-安裝視窗會顯示總進度和下載速度。第一次安裝需要連網，依網速可能需要 30–90 分鐘，之後可以離線使用。安裝中斷時重新執行安裝檔即可，會接著下載並自動修復不完整的檔案。詳細操作見 [使用說明](static/help.html)。
-
-系統需求：Windows 10 22H2／11 64 位元、建議預留約 20 GB 磁碟空間；建議 NVIDIA 顯示卡（驅動支援 CUDA 12.6 以上）。
-
-## 一鍵完整移除
-
-安裝後可從桌面或開始選單點「雷虎練唱台 完整移除」，也可以下載本分支 `installer/releases/` 中的 `CleanUninstall.exe`。工具不依賴練唱台的 Python 或第三方套件。若安裝中斷且尚未登錄安裝位置，請從安裝資料夾內執行 `clean-uninstall.exe`。
-
-確認後會關閉練唱台，移除內嵌 Python／套件、音訊模型、下載暫存、程式與捷徑。預設保留歌曲庫、錄音及設定（含 API 金鑰）；取消勾選保留選項才會一併刪除。
-
-本機版會刪除目前設定與安裝紀錄中的 Ollama 模型。其他模型與其共用模型層會保留；遠端 Ollama 不會被清理。若沒有其他模型，可勾選一併解除安裝 Ollama 並清除未完成的模型下載暫存。新版安裝程式會記錄是否由練唱台安裝 Ollama；舊版或來源不明時，Ollama 預設保留，需自行勾選。
-
-不會移除系統 Python、顯示卡驅動或其他程式套件。不會跟隨資料夾連結刪除外部檔案。清理失敗會保留進度紀錄，可重新執行。Windows 的一般「解除安裝」維持原本流程；要清除本機 AI 共用資源，請使用「完整移除」。
-
-## 從原始碼建置安裝檔
-
-從原始碼執行時，仍需自行安裝 [Ollama](https://ollama.com/download) 並執行 `ollama pull qwen2.5:14b`。程式在 Windows 啟動時會嘗試啟動已安裝的本機 Ollama；自訂遠端網址需自行提供服務。
-
-需要 [NSIS](https://nsis.sourceforge.io/)：
-
-```sh
-sh installer/build.sh
-```
-
-產生的安裝檔在 `installer/out/`。
-
-## 檔案結構
-
-| 檔案 | 用途 |
-| --- | --- |
-| `app.py` | 本機伺服器（Flask） |
-| `desktop.py` | 桌面視窗（pywebview），伺服器在另一個行程執行 |
-| `pipeline.py` | 分軌、音高、歌詞辨識、線上歌詞搜尋、歌曲庫 |
-| `ai_api.py` | 呼叫本機 AI 並記錄 token 用量與費用 |
-| `share.py` | 錄音混音、匯出音訊、直式影片與成績卡 |
-| `ollama_setup.py` | 尋找／啟動 Ollama、續傳模型下載與載入檢查 |
-| `installer.py` | 安裝時偵測顯示卡、安裝套件、下載模型 |
-| `setup/install.ps1` | 安裝檔呼叫的 PowerShell 安裝腳本 |
-| `installer/leihu.nsi` | NSIS 安裝檔腳本 |
-| `static/` | 介面（HTML／JS／CSS）與使用說明 |
-
-API 金鑰、歌曲庫、用量紀錄都存在安裝資料夾裡的 `config.json`、`library/`、`usage-local.json`，不會被提交到這個 repo（見 `.gitignore`）。
+Windows 安裝檔以 `sh installer/build.sh` 建置，需要 NSIS。Mac 請使用 [macos-ai-choice 分支](https://github.com/samael-leung/Leihu-singsing/tree/macos-ai-choice)。Linux 環境已驗證模擬三家 API 的請求／回應、切換供應商、金鑰隱藏、硬體選模、下載失敗與恢復、設定介面及清理邏輯。尚未以真實 API 額度測試三家模型，也尚未驗證 Windows GUI／GPU 與 Mac Homebrew／Metal／麥克風。
 
 ## 使用的開源專案
 

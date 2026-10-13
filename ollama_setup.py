@@ -61,7 +61,7 @@ def ensure_service(base: str, logs: Path) -> None:
     with open(logs / "ollama-server.log", "ab") as log:
         process = subprocess.Popen([str(executable), "serve"], env=env,
                                    stdin=subprocess.DEVNULL, stdout=log, stderr=log,
-                                   creationflags=flags)
+                                   creationflags=flags, start_new_session=sys.platform != "win32")
     deadline = time.monotonic() + 60
     while time.monotonic() < deadline:
         if service_ready(base):

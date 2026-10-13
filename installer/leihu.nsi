@@ -10,7 +10,7 @@ ManifestDPIAware true
 !define REGKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\LeihuLiantai"
 
 Name "${APPNAME} ${VERSION}"
-OutFile "out\LeihuLiantai-localModel-${VERSION}-Setup.exe"
+OutFile "out\LeihuLiantai-windows-ai-choice-${VERSION}-Setup.exe"
 InstallDir "$LOCALAPPDATA\LeihuLiantai"
 InstallDirRegKey HKCU "${REGKEY}" "InstallLocation"
 RequestExecutionLevel user
@@ -27,7 +27,7 @@ VIAddVersionKey /LANG=1028 "LegalCopyright" "© 2026 雷虎肯茲 (Leihustore)"
 !define MUI_UNICON "payload\static\icon.ico"
 !define MUI_ABORTWARNING
 !define MUI_WELCOMEPAGE_TITLE "安裝 ${APPNAME} ${VERSION}"
-!define MUI_WELCOMEPAGE_TEXT "雷虎練唱台會把歌曲分成主唱、合音、伴奏，畫出主唱旋律並辨識歌詞，讓你調 KEY、放慢速度練唱。$\r$\n$\r$\n安裝時會自動下載 Python、AI 套件、Ollama 與 Qwen2.5 14B 模型（模型約 9 GB），建議預留 20 GB 磁碟空間，依網路速度可能需要 30–90 分鐘。有 NVIDIA 顯示卡時會自動安裝顯示卡加速版。$\r$\n$\r$\n安裝過程會開啟一個黑色視窗顯示進度，請不要關閉它。"
+!define MUI_WELCOMEPAGE_TEXT "雷虎練唱台會把歌曲分成主唱、合音、伴奏，畫出主唱旋律並辨識歌詞，讓你調 KEY、放慢速度練唱。$\r$\n$\r$\n安裝時會下載 Python 與音訊 AI 套件；首次啟動可選本機模型或 Claude、Gemini、OpenAI API。本機模型依硬體選擇並下載，API 模式不下載語言模型。音訊套件建議預留 8 GB，使用本機模式時需額外空間。有 NVIDIA 顯示卡時會自動安裝顯示卡加速版。$\r$\n$\r$\n安裝過程會開啟一個黑色視窗顯示進度，請不要關閉它。"
 !define MUI_FINISHPAGE_RUN
 !define MUI_FINISHPAGE_RUN_TEXT "開啟雷虎練唱台"
 !define MUI_FINISHPAGE_RUN_FUNCTION LaunchApp

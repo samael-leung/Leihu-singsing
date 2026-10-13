@@ -279,7 +279,7 @@ async function pollJobs() {
   clearTimeout(jobTimer);
   let st;
   try { st = await api("/api/status"); } catch { jobTimer = setTimeout(pollJobs, 3000); return; }
-  updateAIChip(st.ai_ready, st.session_cost);
+  updateAIChip(st.ai_ready, st.session_cost, st.ai_provider);
   if (st.version) { $("#ver").textContent = st.version; document.title = `雷虎練唱台 ${st.version}`; }
   const box = $("#jobs");
   box.innerHTML = "";
@@ -331,9 +331,10 @@ async function waitJob(jid, onStep) {
 const usd = v => v == null ? "—" : "US$" + (v < 0.01 ? v.toFixed(4) : v.toFixed(2));
 const num = v => (v || 0).toLocaleString("en-US");
 const usageLine = u => u ? `這次用了 ${num(u.input_tokens + u.output_tokens)} tokens（輸入 ${num(u.input_tokens)}、輸出 ${num(u.output_tokens)}），約 ${usd(u.cost_usd)}` : "";
-function updateAIChip(ready, cost) {
-  const c = $("#ai-chip");
-  c.textContent = !ready ? "本機 AI：服務未啟動或模型未下載" : cost ? `本機 AI：本次 ${usd(cost)}` : "本機 AI：可用（無 API 費用）";
+const AI_NAMES = {ollama: "本機 AI", openai: "OpenAI", claude: "Claude", gemini: "Gemini"};
+function updateAIChip(ready, cost, provider) {
+  const c = $("#ai-chip"), name = AI_NAMES[provider] || "AI";
+  c.textContent = !ready ? `${name}：請完成設定` : provider === "ollama" ? "本機 AI：可用（無 API 費用）" : `${name}：${cost == null ? "已設定金鑰" : "本次 " + usd(cost)}`;
   c.className = "chip" + (ready ? " ok" : "");
 }
 $("#ai-chip").onclick = () => openSettings(true);
@@ -363,7 +364,7 @@ async function renderUsage() {
     sp[1].textContent = `${num(c.input_tokens + c.output_tokens)} tok・${usd(c.cost_usd)}`;
     rec.appendChild(el);
   }
-  if (!u.total.calls) rec.textContent = "還沒有使用過 本機 AI。";
+  if (!u.total.calls) rec.textContent = "目前供應商還沒有 AI 用量紀錄。";
 }
 
 /* ------------------------------------------------------------ 開啟歌曲 */
@@ -969,7 +970,7 @@ async function applyCandidate(it) {
     $("#lrc").value = r.lrc; setLines(r.lrc);
     $("#cand-box").hidden = true;
     $("#ref-lyrics").value = (it.plain || "").split(/\r?\n/).map(x => x.trim()).filter(Boolean).join("\n");
-    toast(`已套用「${it.track}」，${r.how}。時間不準可以用「逐句調整」或本機 AI 對齊`, 5000);
+    toast(`已套用「${it.track}」，${r.how}。時間不準可以用「逐句調整」或 AI 對齊`, 5000);
     $("#timing-box").open = true;
   } catch (e) { toast(e.message); }
 }
@@ -1028,7 +1029,7 @@ $("#align").onclick = async () => {
   const text = $("#ref-lyrics").value.trim();
   if (!text) return toast("先貼上正確的歌詞");
   const st = $("#align-state"); const b = $("#align");
-  b.disabled = true; st.textContent = "本機 AI 對齊中…";
+  b.disabled = true; st.textContent = "AI 對齊中…";
   try {
     const r = await api(`/api/songs/${S.song.id}/ai/align`, { json: { text } });
     $("#lrc").value = r.lrc; setLines(r.lrc);
@@ -1403,7 +1404,7 @@ function renderTakeDetail() {
   box.innerHTML = khHtml + `<div class="hint">命中率是落在原唱 ±50 音分內的比例（換音時早晚 0.1 秒內都算對）。已自動對齊 ${t.offset > 0 ? "+" : ""}${t.offset}s 的錄音延遲${t.octave ? "，並換算八度" : ""}。</div>
     ${worst.length ? `<b>最需要練的句子</b>` : ""}
     <div class="wl"></div>
-    <div class="row"><button id="share-take" class="primary">匯出／分享這次演唱</button><button id="coach">請本機 AI 給練習建議</button><button id="rescore" class="ghost">重新評分</button><button id="del-take" class="ghost danger">刪除這次錄音</button></div>
+    <div class="row"><button id="share-take" class="primary">匯出／分享這次演唱</button><button id="coach">請 AI 給練習建議</button><button id="rescore" class="ghost">重新評分</button><button id="del-take" class="ghost danger">刪除這次錄音</button></div>
     <div class="coach" ${t.coach ? "" : "hidden"}></div>`;
   const wl = $(".wl", box);
   for (const l of worst) {
@@ -1416,7 +1417,7 @@ function renderTakeDetail() {
   $(".coach", box).textContent = t.coach || "";
   $("#coach").onclick = async () => {
     const b = $("#coach"), out = $(".coach", box);
-    b.disabled = true; out.hidden = false; out.textContent = "本機 AI 分析中…";
+    b.disabled = true; out.hidden = false; out.textContent = "AI 分析中…";
     try { const r = await api(`/api/songs/${S.song.id}/ai/coach`, { json: { take: t.id } }); t.coach = r.text; out.textContent = r.text + (r.usage ? "\n\n" + usageLine(r.usage) : ""); pollJobs(); }
     catch (e) { out.textContent = e.message; }
     finally { b.disabled = false; }
@@ -2016,11 +2017,32 @@ document.addEventListener("keydown", e => {
 });
 
 /* ------------------------------------------------------------ 設定 */
+let settingsKeys = {};
+let aiRecommendation = null;
+let aiPreparing = false;
+function updateAIMode() {
+  const local = $("#cfg-ai-mode").value === "local";
+  $("#cfg-local").hidden = !local;
+  $("#cfg-api").hidden = local;
+  const provider = $("#cfg-provider").value;
+  for (const name of ["openai", "claude", "gemini"]) $("#cfg-" + name).hidden = name !== provider;
+  $("#cfg-key-status").textContent = settingsKeys[provider] ? "已有金鑰（留空保留）；也可使用環境變數提供的金鑰" : "請輸入此供應商的 API 金鑰";
+  const automatic = $("#cfg-auto-model").checked;
+  $("#cfg-local-model").disabled = automatic;
+  if (automatic && aiRecommendation) $("#cfg-local-model").value = aiRecommendation.model;
+}
 async function openSettings(focusUsage) {
   const [cfg, st] = await Promise.all([api("/api/config"), api("/api/status")]);
-  renderUsage().then(() => { if (focusUsage === true) $("#usage").scrollIntoView({ block: "center" }); });
+  settingsKeys = cfg.has_keys || {};
+  $("#cfg-ai-mode").value = cfg.ai_mode;
+  $("#cfg-provider").value = cfg.api_provider;
   $("#cfg-url").value = cfg.ollama_url;
-  $("#cfg-model").value = cfg.ollama_model;
+  $("#cfg-auto-model").checked = cfg.ollama_auto_model;
+  $("#cfg-local-model").value = cfg.ollama_model;
+  for (const name of ["openai", "claude", "gemini"]) {
+    $("#cfg-" + name + "-model").value = cfg[name === "claude" ? "claude_model" : name + "_model"];
+    $("#cfg-" + name + "-key").value = "";
+  }
   $("#cfg-whisper").value = cfg.whisper_model;
   $("#cfg-lang").value = cfg.lyrics_language || "";
   $("#cfg-tw").checked = !!cfg.convert_to_taiwan;
@@ -2028,24 +2050,68 @@ async function openSettings(focusUsage) {
   $("#cfg-kara").value = cfg.karaoke_model;
   $("#cfg-pitch").value = cfg.pitch_model;
   const m = st.modules;
-  const items = [["uvr", "AI 人聲分離"], ["crepe", "CREPE 音高"], ["whisper", "Whisper 歌詞辨識"], ["pedalboard", "高品質移調"], ["opencc", "台灣繁體轉換"], ["ai_client", "AI 呼叫元件"], ["cuda", "顯示卡加速"]];
+  const items = [["uvr", "AI 人聲分離"], ["crepe", "CREPE 音高"], ["whisper", "Whisper 歌詞辨識"], ["pedalboard", "高品質移調"], ["opencc", "台灣繁體轉換"], ["ai_client", "AI 呼叫元件"], ["cuda", "NVIDIA 顯示卡加速"]];
   $("#mods").innerHTML = items.map(([k, l]) => `<span class="chip ${m[k] ? "ok" : ""}">${m[k] ? "✓" : "✕"} ${l}</span>`).join("")
     + (st.cuda_note ? `<div class="hint" id="cuda-note"></div>` : "");
   if (st.cuda_note) $("#cuda-note").textContent = st.cuda_note;
   $("#settings").hidden = false;
+  updateAIMode();
+  renderUsage().then(() => { if (focusUsage === true) $("#usage").scrollIntoView({ block: "center" }); });
+  $("#cfg-hardware").textContent = "偵測硬體中…";
+  try {
+    aiRecommendation = await api("/api/ai/hardware");
+    $("#cfg-hardware").textContent = `${aiRecommendation.reason}；建議 ${aiRecommendation.model}`;
+    updateAIMode();
+  } catch (e) { $("#cfg-hardware").textContent = e.message; }
 }
 async function saveSettings(extra = {}) {
+  if (aiPreparing) return;
+  const button = $("#cfg-save"), progress = $("#cfg-ai-progress");
+  button.disabled = true;
   try {
-    await api("/api/config", { json: {
-      ollama_url: $("#cfg-url").value.trim(), ollama_model: $("#cfg-model").value.trim(),
+    const body = {
+      ai_mode: $("#cfg-ai-mode").value, api_provider: $("#cfg-provider").value,
+      ai_setup_complete: true,
+      ollama_url: $("#cfg-url").value.trim(), ollama_model: $("#cfg-local-model").value.trim(),
+      ollama_auto_model: $("#cfg-auto-model").checked,
       whisper_model: $("#cfg-whisper").value, lyrics_language: $("#cfg-lang").value,
       convert_to_taiwan: $("#cfg-tw").checked, separation_model: $("#cfg-sep").value.trim(),
       karaoke_model: $("#cfg-kara").value.trim(), pitch_model: $("#cfg-pitch").value,
       ...extra,
-    } });
-    $("#settings").hidden = true; toast("設定已儲存"); pollJobs();
-  } catch (e) { toast(e.message); }
+    };
+    for (const name of ["openai", "claude", "gemini"]) {
+      body[name + "_model"] = $("#cfg-" + name + "-model").value.trim();
+      const key = $("#cfg-" + name + "-key").value.trim();
+      if (key) body[name === "claude" ? "anthropic_api_key" : name + "_api_key"] = key;
+    }
+    const cfg = await api("/api/config", {json: body});
+    settingsKeys = cfg.has_keys || {};
+    for (const name of ["openai", "claude", "gemini"]) $("#cfg-" + name + "-key").value = "";
+    if (body.ai_mode === "local") {
+      aiPreparing = true;
+      progress.textContent = "準備本機模型中，下載可能需數分鐘；關閉此視窗仍會繼續。";
+      const result = await api("/api/ai/prepare", {json: {}});
+      await waitJob(result.job, j => { progress.textContent = `${j.step} ${Math.round(j.progress * 100)}%`; });
+      progress.textContent = `${result.model} 已準備好`;
+      toast("本機模型已準備好");
+    } else {
+      progress.textContent = "API 設定已儲存";
+      toast("API 設定已儲存");
+    }
+    $("#settings").hidden = true;
+    pollJobs();
+  } catch (e) { progress.textContent = e.message; toast(e.message); }
+  finally { button.disabled = false; aiPreparing = false; }
 }
+$("#cfg-ai-mode").onchange = updateAIMode;
+$("#cfg-provider").onchange = updateAIMode;
+$("#cfg-auto-model").onchange = updateAIMode;
+$("#cfg-clear-api-key").onclick = async () => {
+  try {
+    const cfg = await api("/api/config", {json: {clear_api_key: $("#cfg-provider").value}});
+    settingsKeys = cfg.has_keys || {}; updateAIMode(); toast("已清除儲存的金鑰；環境變數需另外移除");
+  } catch (e) { toast(e.message); }
+};
 $("#btn-settings").onclick = openSettings;
 $("#cfg-close").onclick = () => ($("#settings").hidden = true);
 $("#cfg-save").onclick = () => saveSettings();
@@ -2055,3 +2121,5 @@ $("#settings").addEventListener("click", e => { if (e.target.id === "settings") 
 loadSongs().catch(e => toast(e.message));
 pollJobs();
 requestAnimationFrame(frame);
+
+api("/api/config").then(cfg => { if (!cfg.ai_setup_complete) openSettings(); }).catch(e => toast(e.message));

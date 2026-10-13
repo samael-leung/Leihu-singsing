@@ -6,11 +6,7 @@ SilentInstall silent
 SetCompressor /SOLID lzma
 !define /file VERSION "..\VERSION"
 Name "雷虎練唱台 ${VERSION} 一鍵完整移除"
-!ifdef LOCAL_MODEL
-OutFile "out\LeihuLiantai-localModel-${VERSION}-CleanUninstall.exe"
-!else
-OutFile "out\LeihuLiantai-OpenAI-${VERSION}-CleanUninstall.exe"
-!endif
+OutFile "out\LeihuLiantai-windows-ai-choice-${VERSION}-CleanUninstall.exe"
 Icon "..\static\icon.ico"
 Section
   StrCpy $0 "$EXEDIR"
@@ -30,7 +26,7 @@ Section
   ${EndIf}
   ; Exit immediately so the PowerShell cleanup can delete this launcher too.
 !ifdef LOCAL_MODEL
-  Exec '"$3" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "$2\clean-uninstall.ps1" -AppDir "$0" -LocalModel'
+  Exec '"$3" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "$2\clean-uninstall.ps1" -AppDir "$0" -LocalModel -HybridAI'
 !else
   Exec '"$3" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "$2\clean-uninstall.ps1" -AppDir "$0"'
 !endif

@@ -59,6 +59,17 @@ try {
     $blocked=$false; try { $null=Get-CleanupPlan $env:USERPROFILE $false } catch { $blocked=$true }
     Assert $blocked 'User home was accepted for deletion'
 
+    $root=Fixture 'api-only'; $script:fakeExe='existing-ollama.exe'
+    Assert ((Get-CleanupPlan $root $true $true).Models.Count -eq 0) 'Hybrid installer without configuration selected unrelated models'
+    Set-Content (Join-Path $root 'config.json') '{"ai_mode":"api","ai_setup_complete":true,"ollama_model":"qwen2.5:3b"}'
+    Assert ((Get-CleanupPlan $root $true $true).Models.Count -eq 0) 'API-only installation selected an unrelated local model'
+    Set-Content (Join-Path $root 'ollama-install.json') '{"installed_by_app":false,"models":["owned:7b"]}'
+    $plan=Get-CleanupPlan $root $true $true
+    Assert ($plan.Models.Count -eq 1 -and $plan.Models[0] -eq 'owned:7b') 'Switching to API lost previously recorded app model ownership'
+    Set-Content (Join-Path $root 'usage-ai-choice.json') '{"calls":[]}'
+    Remove-AppFiles $plan $false
+    Assert (!(Test-Path (Join-Path $root 'usage-ai-choice.json'))) 'Hybrid usage ledger was retained despite purge'
+
     $root=Fixture 'app-local'; $script:fakeExe='existing-ollama.exe'
     Set-Content (Join-Path $root 'config.json') '{"ollama_url":"http://127.0.0.1:11434","ollama_model":"custom:14b"}'
     $plan=Get-CleanupPlan $root $true

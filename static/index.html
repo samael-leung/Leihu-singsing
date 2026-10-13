@@ -16,7 +16,7 @@
     <button id="nav-about" class="tab">關於開發者</button>
   </nav>
   <span class="spacer"></span>
-  <button id="ai-chip" class="chip" title="查看 本機 AI 用量">本機 AI：未設定</button>
+  <button id="ai-chip" class="chip" title="查看 AI 用量">AI：未設定</button>
   <button id="btn-settings" class="ghost">設定</button>
 </header>
 
@@ -218,10 +218,10 @@
           <div class="row"><button id="tap-hit" class="primary">這句開始</button><button id="tap-stop" class="ghost">結束打點</button></div>
         </div>
         <details>
-          <summary>貼上正確歌詞，用本機 AI 對齊時間（Ollama）</summary>
+          <summary>貼上正確歌詞，用 AI 對齊時間（依設定的模式）</summary>
           <div class="detail" style="margin-top:8px">
             <textarea id="ref-lyrics" placeholder="每行一句，照演唱順序貼上" style="min-height:120px"></textarea>
-            <div class="row"><button id="align">用本機 AI 對齊</button><span id="align-state" class="hint"></span></div>
+            <div class="row"><button id="align">用 AI 對齊</button><span id="align-state" class="hint"></span></div>
             <span id="align-cost" class="hint"></span>
           </div>
         </details>
@@ -328,10 +328,35 @@
   <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="set-title">
     <h1 id="set-title">設定</h1>
     <div class="field"><span>已安裝的離線功能</span><div id="mods" class="mods"></div></div>
-    <label class="field"><span>Ollama 服務網址</span><input id="cfg-url" type="url" placeholder="http://127.0.0.1:11434"></label>
-    <label class="field"><span>本機模型（先用 ollama pull 下載）</span><input id="cfg-model" type="text" placeholder="qwen2.5:14b"></label>
+    <label class="field"><span>AI 模式</span><select id="cfg-ai-mode"><option value="local">本機模型（Ollama，無 API 費用）</option><option value="api">API（使用供應商帳戶）</option></select></label>
+    <div id="cfg-local" class="detail">
+      <label class="field"><span>Ollama 服務網址</span><input id="cfg-url" type="url" placeholder="http://127.0.0.1:11434"></label>
+      <label class="row"><input id="cfg-auto-model" type="checkbox">依硬體自動選擇模型</label>
+      <div id="cfg-hardware" class="hint" role="status"></div>
+      <label class="field"><span>本機模型</span><input id="cfg-local-model" type="text" placeholder="qwen2.5:7b"></label>
+      <p class="hint">儲存時會啟動 Ollama、下載選定模型並驗證回覆。已有模型會重用；中斷後重新儲存即可續傳。每次 AI 回覆後會釋放模型記憶體。</p>
+    </div>
+    <div id="cfg-api" class="detail" hidden>
+      <label class="field"><span>API 供應商</span><select id="cfg-provider"><option value="openai">OpenAI</option><option value="claude">Claude（Anthropic）</option><option value="gemini">Gemini（Google）</option></select></label>
+      <div id="cfg-openai" class="detail">
+        <label class="field"><span>OpenAI 模型</span><input id="cfg-openai-model" type="text" placeholder="gpt-4.1-mini"></label>
+        <label class="field"><span>OpenAI API 金鑰</span><input id="cfg-openai-key" type="password" autocomplete="off" placeholder="輸入新金鑰；留空保留原值"></label>
+      </div>
+      <div id="cfg-claude" class="detail" hidden>
+        <label class="field"><span>Claude 模型</span><input id="cfg-claude-model" type="text" placeholder="claude-sonnet-4-6"></label>
+        <label class="field"><span>Anthropic API 金鑰</span><input id="cfg-claude-key" type="password" autocomplete="off" placeholder="輸入新金鑰；留空保留原值"></label>
+      </div>
+      <div id="cfg-gemini" class="detail" hidden>
+        <label class="field"><span>Gemini 模型</span><input id="cfg-gemini-model" type="text" placeholder="gemini-2.5-flash"></label>
+        <label class="field"><span>Gemini API 金鑰</span><input id="cfg-gemini-key" type="password" autocomplete="off" placeholder="輸入新金鑰；留空保留原值"></label>
+      </div>
+      <div id="cfg-key-status" class="hint" role="status"></div>
+      <button id="cfg-clear-api-key" class="ghost danger">清除目前供應商的已存金鑰</button>
+      <p class="hint">API 會把歌詞或練習分析傳給選定供應商，可能產生費用。訂閱網頁版不等於 API 額度。金鑰儲存在此安裝資料夾的 config.json。</p>
+    </div>
+    <div id="cfg-ai-progress" class="hint" role="status" aria-live="polite"></div>
     <div id="usage" class="usage">
-      <div class="usage-head"><span>本機 AI 用量與費用</span><span class="hint">本機推論無 API 費用；電力與硬體成本另計</span></div>
+      <div class="usage-head"><span>目前供應商的 AI 用量與費用</span><span class="hint">本機推論無 API 費用；API 金額未定價時顯示 —，請以供應商帳單為準</span></div>
       <div id="usage-grid" class="usage-grid"></div>
       <div id="usage-recent" class="usage-recent"></div>
     </div>

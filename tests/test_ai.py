@@ -12,9 +12,9 @@ import ai_api as A
 import app as web
 import pipeline as P
 
-LOCAL = A.PROVIDER == 'ollama'
+LOCAL = A.provider() == 'ollama'
 MODEL_KEY = 'ollama_model' if LOCAL else 'openai_model'
-MODEL = 'qwen2.5:14b' if LOCAL else 'gpt-4.1-mini'
+MODEL = P.DEFAULT_CONFIG['ollama_model'] if LOCAL else 'gpt-4.1-mini'
 TOOL = {'name': 'set_line_times', 'input_schema': {
     'type': 'object', 'properties': {'times': {
         'type': 'array', 'items': {'type': 'number'}, 'minItems': 2, 'maxItems': 2}},
@@ -43,7 +43,7 @@ class AIIntegrationTests(unittest.TestCase):
         for p in self.patches: p.start()
         self.addCleanup(self.tmp.cleanup)
         for p in self.patches: self.addCleanup(p.stop)
-        cfg = dict(P.DEFAULT_CONFIG)
+        cfg = dict(P.DEFAULT_CONFIG, ollama_auto_model=False)
         if not LOCAL: cfg['openai_api_key'] = 'sk-private-test-key-123456'
         P.save_config(cfg)
         self.client = web.app.test_client()
@@ -182,7 +182,7 @@ class AIIntegrationTests(unittest.TestCase):
             result=self.client.post('/api/songs/abcdef/ai/align', json={'text':'第一句\n第二句'})
         self.assertEqual(result.status_code, 200, result.json)
         self.assertIn('[00:01.00]第一句', result.json['lrc'])
-        self.assertEqual(P.read_meta(d)['lyrics_source'], A.PROVIDER)
+        self.assertEqual(P.read_meta(d)['lyrics_source'], A.provider())
         self.assertEqual((d/'lyrics.lrc').read_text('utf-8'), result.json['lrc'])
 
     def test_alignment_failure_preserves_existing_lyrics(self):

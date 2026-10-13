@@ -150,11 +150,17 @@ class InstallerOllamaTests(unittest.TestCase):
         O.prepare_model.side_effect=RuntimeError('download interrupted')
         with patch.object(O,'service_ready',return_value=True): self.assertFalse(I.prepare_ollama())
 
-    def test_main_failure_leaves_no_completion_marker_or_launch(self):
+    def test_initial_installer_defers_local_model_until_user_selects_it(self):
         marker=self.root/'installed.json'; marker.write_text('{"version":"old"}')
-        with patch.object(I,'stop_app'),patch.object(I,'clean_stale'),patch.object(I,'detect_gpu',return_value=('cpu','CPU')),patch.object(I,'install_torch',return_value=True),patch.object(I,'install_packages',return_value=True),patch.object(I,'prefetch_models'),patch.object(I,'prepare_ollama',return_value=False),patch.object(I,'stage'),patch.object(I,'launch') as launch,patch.object(I,'verify') as verify,patch.object(I.sys,'argv',['installer.py','--launch']):
+        with patch.object(I,'stop_app'),patch.object(I,'clean_stale'),patch.object(I,'detect_gpu',return_value=('cpu','CPU')),patch.object(I,'install_torch',return_value=True),patch.object(I,'install_packages',return_value=True),patch.object(I,'prefetch_models'),patch.object(I,'prepare_ollama') as prepare,patch.object(I,'stage'),patch.object(I,'launch') as launch,patch.object(I,'verify',return_value=True) as verify,patch.object(I.sys,'argv',['installer.py','--launch']):
+            self.assertEqual(I.main(),0)
+        self.assertTrue(marker.exists()); prepare.assert_not_called(); launch.assert_called_once(); verify.assert_called_once()
+
+    def test_dependency_failure_leaves_no_completion_marker_or_launch(self):
+        marker=self.root/'installed.json'; marker.write_text('{"version":"old"}')
+        with patch.object(I,'stop_app'),patch.object(I,'clean_stale'),patch.object(I,'detect_gpu',return_value=('cpu','CPU')),patch.object(I,'install_torch',return_value=False),patch.object(I,'prepare_ollama') as prepare,patch.object(I,'stage'),patch.object(I,'launch') as launch,patch.object(I.sys,'argv',['installer.py','--launch']):
             self.assertEqual(I.main(),1)
-        self.assertFalse(marker.exists()); launch.assert_not_called(); verify.assert_not_called()
+        self.assertFalse(marker.exists()); prepare.assert_not_called(); launch.assert_not_called()
 
 
 if __name__=='__main__': unittest.main()

@@ -589,13 +589,14 @@ def launch() -> None:
                      creationflags=0x00000008 | 0x00000200)
 
 
-def prepare_ollama() -> bool:
+def prepare_ollama(cfg=None, report=None) -> bool:
     """Reuse an existing service, otherwise install verified official Windows Ollama."""
     import ollama_setup as O
     import pipeline as P
-    cfg = P.load_config()
+    cfg = P.load_config() if cfg is None else cfg
+    update = report or progress
     base = cfg.get("ollama_url") or "http://127.0.0.1:11434"
-    model = cfg.get("ollama_model") or "qwen2.5:14b"
+    model = cfg.get("ollama_model") or "qwen2.5:3b"
     try:
         if not O.service_ready(base) and O.find_ollama() is None:
             if not O.is_local(base):
@@ -633,10 +634,10 @@ def prepare_ollama() -> bool:
         if model not in ownership["models"]:
             ownership["models"].append(model)
             ownership_file.write_text(json.dumps(ownership), "utf-8")
-        progress(0.15, "啟動 Ollama")
+        update(0.15, "啟動 Ollama")
         O.ensure_service(base, ROOT / "logs")
-        say(f"  準備本機模型 {model}（預設模型約 9 GB，中斷後可續傳）…")
-        O.prepare_model(base, model, lambda frac, detail: progress(0.15 + frac * 0.85, detail))
+        say(f"  準備本機模型 {model}（中斷後可續傳）…")
+        O.prepare_model(base, model, lambda frac, detail: update(0.15 + frac * 0.85, detail))
         say(f"  ✓ Ollama 與 {model} 已準備好")
         return True
     except Exception as error:
@@ -680,10 +681,8 @@ def main() -> int:
     clean_stale()
     stage(4, total, "下載音訊 AI 模型", 70, 80)
     prefetch_models()
-    stage(5, total, "安裝 Ollama 與本機語言模型", 80, 94)
-    if not prepare_ollama():
-        say("安裝未完成。請確認網路與磁碟空間後重新執行修復與更新，模型下載可續傳。")
-        return 1
+    stage(5, total, "AI 模式於首次啟動時選擇", 80, 94)
+    say("  首次啟動請選擇本機模型或 API；API 模式不需要下載語言模型。")
     stage(6, total, "檢查", 94, 99)
     ok = verify(tag)
     stage(7, total, "完成", 99, 100)

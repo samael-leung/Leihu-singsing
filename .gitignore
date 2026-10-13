@@ -23,3 +23,5 @@ installer/out/
 
 # 已發布至此分支的安裝檔
 !installer/releases/*.exe
+
+usage-ai-choice.json

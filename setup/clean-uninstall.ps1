@@ -1,5 +1,5 @@
 ﻿#Requires -Version 5.1
-param([string]$AppDir = '', [switch]$LocalModel, [switch]$FunctionsOnly)
+param([string]$AppDir = '', [switch]$LocalModel, [switch]$HybridAI, [switch]$FunctionsOnly)
 $ErrorActionPreference = 'Stop'
 
 function Read-Object([string]$Path) {
@@ -7,7 +7,7 @@ function Read-Object([string]$Path) {
     return (Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json)
 }
 
-function Get-CleanupPlan([string]$Root, [bool]$IncludeLocalModel) {
+function Get-CleanupPlan([string]$Root, [bool]$IncludeLocalModel, [bool]$HybridMode = $false) {
     $full = [IO.Path]::GetFullPath($Root).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
     $forbidden = @([IO.Path]::GetPathRoot($full).TrimEnd('\','/'), $env:USERPROFILE,
                    $env:LOCALAPPDATA, $env:APPDATA, $env:WINDIR, $env:ProgramFiles,
@@ -40,8 +40,8 @@ function Get-CleanupPlan([string]$Root, [bool]$IncludeLocalModel) {
     if ($loopback -and $hasOllama -and ($IncludeLocalModel -or $owned -or ($cfg -and $cfg.ollama_model))) {
         if ($resuming) { $models += @($state.models) }
         if ($owned) { $models += @($owned.models) }
-        if ($cfg -and $cfg.ollama_model) { $models += [string]$cfg.ollama_model }
-        elseif ($IncludeLocalModel) { $models += 'qwen2.5:14b' }
+        if ($cfg -and $cfg.ollama_model -and (!$HybridMode -or ($cfg.ai_mode -eq 'local' -and $cfg.ai_setup_complete))) { $models += [string]$cfg.ollama_model }
+        elseif ($IncludeLocalModel -and !$HybridMode) { $models += 'qwen2.5:14b' }
     }
     $models = @($models | Where-Object { $_ } | Select-Object -Unique)
     foreach ($model in $models) {
@@ -187,10 +187,10 @@ function Remove-AppFiles($Plan, [bool]$KeepData) {
             Remove-SafeTree $path
         }
     }
-    $files=@('app.py','desktop.py','pipeline.py','share.py','ai_api.py','claude_api.py','ollama_setup.py','installer.py',
+    $files=@('app.py','desktop.py','pipeline.py','share.py','ai_api.py','claude_api.py','ollama_setup.py','model_setup.py','installer.py',
              'VERSION','requirements.txt','requirements-win.txt','installed.json','ollama-install.json',
              '使用說明.html','版權與使用聲明.txt','uninstall.exe','clean-uninstall.exe')
-    if (!$KeepData) { $files += @('config.json','usage.json','usage-local.json','usage-openai.json') }
+    if (!$KeepData) { $files += @('config.json','usage.json','usage-local.json','usage-openai.json','usage-ai-choice.json') }
     foreach ($name in $files) {
         $path=Join-Path $Plan.Root $name
         for ($attempt=0; $attempt -lt 10; $attempt++) {
@@ -273,7 +273,7 @@ try {
         $AppDir=(Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\LeihuLiantai' -ErrorAction SilentlyContinue).InstallLocation
         if (!$AppDir) { $AppDir=Join-Path $env:LOCALAPPDATA 'LeihuLiantai' }
     }
-    $plan=Get-CleanupPlan $AppDir ([bool]$LocalModel)
+    $plan=Get-CleanupPlan $AppDir ([bool]$LocalModel) ([bool]$HybridAI)
     $selection=Show-CleanupConfirmation $plan
     if ($selection.Confirmed) {
         Invoke-Cleanup $plan $selection

@@ -184,7 +184,10 @@ def _font(size: int, bold: bool = False):
     win = Path(r"C:\Windows\Fonts")
     names = (["msjhbd.ttc", "msjh.ttc"] if bold else ["msjh.ttc", "msjhbd.ttc"]) + [
         "/usr/share/fonts/opentype/noto/NotoSansCJK-%s.ttc" % ("Bold" if bold else "Regular"),
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", "/System/Library/Fonts/PingFang.ttc"]
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/System/Library/Fonts/PingFang.ttc",
+        "/System/Library/Fonts/Supplemental/Songti.ttc",
+        "/System/Library/Fonts/STHeiti Medium.ttc"]
     for n in names:
         p = Path(n) if "/" in n else win / n
         if p.exists():
