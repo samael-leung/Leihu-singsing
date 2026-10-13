@@ -57,7 +57,8 @@ function Show-CleanupConfirmation($Plan) {
     $form.Size = New-Object Drawing.Size(590,350)
     $form.StartPosition = 'CenterScreen'
     $form.FormBorderStyle = 'FixedDialog'; $form.MaximizeBox = $false; $form.MinimizeBox = $false
-    $label = New-Object Windows.Forms.Label
+    $label = New-Object Windows.Forms.TextBox
+    $label.Multiline=$true; $label.ReadOnly=$true; $label.ScrollBars='Vertical'; $label.WordWrap=$true
     $label.Location = New-Object Drawing.Point(18,18); $label.Size = New-Object Drawing.Size(540,170)
     $modelText = '無本機語言模型'
     if ($Plan.Models.Count) { $modelText = $Plan.Models -join ', ' }
@@ -214,7 +215,10 @@ function Invoke-Cleanup($Plan, $Selection) {
     Get-CimInstance Win32_Process | Where-Object {
         $_.ProcessId -ne $PID -and $_.ExecutablePath -and
         $_.ExecutablePath.StartsWith($prefix,[StringComparison]::OrdinalIgnoreCase)
-    } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop }
+    } | ForEach-Object {
+        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+        Wait-Process -Id $_.ProcessId -Timeout 10 -ErrorAction SilentlyContinue
+    }
     if (!$state.models_cleaned) {
         $state.remaining_models=@(Remove-AppModels $Plan)
         $state.models_cleaned=$true
