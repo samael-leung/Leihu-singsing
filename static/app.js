@@ -1865,7 +1865,7 @@ function overlaySync() {
   const body = { ...st, t, title: active ? S.song.title : "" };
   if (active) {
     const lines = JSON.stringify(S.lines.map(l => ({ t: l.t, end: l.end, text: l.text, c: (l.chars || []).map(c => c.t) })));
-    if (lines !== OV.lines) { body.lines = JSON.parse(lines); OV.lines = lines; }
+    if (!prev || prev.sid !== st.sid || lines !== OV.lines) { body.lines = JSON.parse(lines); OV.lines = lines; }
   } else OV.lines = "";
   OV.busy = true; OV.last = now; OV.sent = { ...st, t, at: now };
   fetch("/api/overlay", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })

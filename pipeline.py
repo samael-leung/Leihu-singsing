@@ -562,7 +562,10 @@ def track_pitch(y16: np.ndarray, cfg: dict | None = None, strict: bool = False) 
             # 原唱：把「確定有聲音」的段落往前後延伸到中等把握的影格（氣音、咬字、尾音），減少旋律斷斷續續
             weak = per > 0.22
             for _ in range(25):   # 最多延伸 0.25 秒
-                grow = weak & ~voiced & (np.roll(voiced, 1) | np.roll(voiced, -1))
+                neighbors = np.zeros_like(voiced)
+                neighbors[1:] |= voiced[:-1]
+                neighbors[:-1] |= voiced[1:]
+                grow = weak & ~voiced & neighbors
                 if not grow.any():
                     break
                 voiced = voiced | grow
