@@ -275,7 +275,7 @@ async function pollJobs() {
   clearTimeout(jobTimer);
   let st;
   try { st = await api("/api/status"); } catch { jobTimer = setTimeout(pollJobs, 3000); return; }
-  updateClaudeChip(st.claude_ready, st.session_cost);
+  updateAIChip(st.ai_ready, st.session_cost);
   if (st.version) { $("#ver").textContent = st.version; document.title = `雷虎練唱台 ${st.version}`; }
   const box = $("#jobs");
   box.innerHTML = "";
@@ -320,12 +320,12 @@ async function waitJob(jid, onStep) {
 const usd = v => v == null ? "—" : "US$" + (v < 0.01 ? v.toFixed(4) : v.toFixed(2));
 const num = v => (v || 0).toLocaleString("en-US");
 const usageLine = u => u ? `這次用了 ${num(u.input_tokens + u.output_tokens)} tokens（輸入 ${num(u.input_tokens)}、輸出 ${num(u.output_tokens)}），約 ${usd(u.cost_usd)}` : "";
-function updateClaudeChip(ready, cost) {
-  const c = $("#claude-chip");
-  c.textContent = !ready ? "Claude：未設定" : cost ? `Claude：本次 ${usd(cost)}` : "Claude：可用（需連網）";
+function updateAIChip(ready, cost) {
+  const c = $("#ai-chip");
+  c.textContent = !ready ? "本機 AI：服務未啟動或模型未下載" : cost ? `本機 AI：本次 ${usd(cost)}` : "本機 AI：可用（無 API 費用）";
   c.className = "chip" + (ready ? " ok" : "");
 }
-$("#claude-chip").onclick = () => openSettings(true);
+$("#ai-chip").onclick = () => openSettings(true);
 async function renderUsage() {
   let u;
   try { u = await api("/api/usage"); } catch { return; }
@@ -352,7 +352,7 @@ async function renderUsage() {
     sp[1].textContent = `${num(c.input_tokens + c.output_tokens)} tok・${usd(c.cost_usd)}`;
     rec.appendChild(el);
   }
-  if (!u.total.calls) rec.textContent = "還沒有使用過 Claude。";
+  if (!u.total.calls) rec.textContent = "還沒有使用過 本機 AI。";
 }
 
 /* ------------------------------------------------------------ 開啟歌曲 */
@@ -937,7 +937,7 @@ async function applyCandidate(it) {
     $("#lrc").value = r.lrc; setLines(r.lrc);
     $("#cand-box").hidden = true;
     $("#ref-lyrics").value = (it.plain || "").split(/\r?\n/).map(x => x.trim()).filter(Boolean).join("\n");
-    toast(`已套用「${it.track}」，${r.how}。時間不準可以用「逐句調整」或 Claude 對齊`, 5000);
+    toast(`已套用「${it.track}」，${r.how}。時間不準可以用「逐句調整」或本機 AI 對齊`, 5000);
     $("#timing-box").open = true;
   } catch (e) { toast(e.message); }
 }
@@ -996,9 +996,9 @@ $("#align").onclick = async () => {
   const text = $("#ref-lyrics").value.trim();
   if (!text) return toast("先貼上正確的歌詞");
   const st = $("#align-state"); const b = $("#align");
-  b.disabled = true; st.textContent = "Claude 對齊中…";
+  b.disabled = true; st.textContent = "本機 AI 對齊中…";
   try {
-    const r = await api(`/api/songs/${S.song.id}/claude/align`, { json: { text } });
+    const r = await api(`/api/songs/${S.song.id}/ai/align`, { json: { text } });
     $("#lrc").value = r.lrc; setLines(r.lrc);
     S.lines.forEach((l, i) => { l.chars = distributeChars({ ...l, chars: null }, lineLimit(i)); l.autoChars = false; });
     setLineEnds(); commitLines(true);
@@ -1371,7 +1371,7 @@ function renderTakeDetail() {
   box.innerHTML = khHtml + `<div class="hint">命中率是落在原唱 ±50 音分內的比例（換音時早晚 0.1 秒內都算對）。已自動對齊 ${t.offset > 0 ? "+" : ""}${t.offset}s 的錄音延遲${t.octave ? "，並換算八度" : ""}。</div>
     ${worst.length ? `<b>最需要練的句子</b>` : ""}
     <div class="wl"></div>
-    <div class="row"><button id="share-take" class="primary">匯出／分享這次演唱</button><button id="coach">請 Claude 給練習建議</button><button id="rescore" class="ghost">重新評分</button><button id="del-take" class="ghost danger">刪除這次錄音</button></div>
+    <div class="row"><button id="share-take" class="primary">匯出／分享這次演唱</button><button id="coach">請本機 AI 給練習建議</button><button id="rescore" class="ghost">重新評分</button><button id="del-take" class="ghost danger">刪除這次錄音</button></div>
     <div class="coach" ${t.coach ? "" : "hidden"}></div>`;
   const wl = $(".wl", box);
   for (const l of worst) {
@@ -1384,8 +1384,8 @@ function renderTakeDetail() {
   $(".coach", box).textContent = t.coach || "";
   $("#coach").onclick = async () => {
     const b = $("#coach"), out = $(".coach", box);
-    b.disabled = true; out.hidden = false; out.textContent = "Claude 分析中…";
-    try { const r = await api(`/api/songs/${S.song.id}/claude/coach`, { json: { take: t.id } }); t.coach = r.text; out.textContent = r.text + (r.usage ? "\n\n" + usageLine(r.usage) : ""); pollJobs(); }
+    b.disabled = true; out.hidden = false; out.textContent = "本機 AI 分析中…";
+    try { const r = await api(`/api/songs/${S.song.id}/ai/coach`, { json: { take: t.id } }); t.coach = r.text; out.textContent = r.text + (r.usage ? "\n\n" + usageLine(r.usage) : ""); pollJobs(); }
     catch (e) { out.textContent = e.message; }
     finally { b.disabled = false; }
   };
@@ -1934,10 +1934,9 @@ document.addEventListener("keydown", e => {
 /* ------------------------------------------------------------ 設定 */
 async function openSettings(focusUsage) {
   const [cfg, st] = await Promise.all([api("/api/config"), api("/api/status")]);
-  $("#cfg-balance").value = cfg.balance_usd == null ? "" : cfg.balance_usd;
   renderUsage().then(() => { if (focusUsage === true) $("#usage").scrollIntoView({ block: "center" }); });
-  $("#cfg-key").value = ""; $("#cfg-key").placeholder = cfg.has_key ? `已設定 ${cfg.anthropic_api_key || "（環境變數）"}` : "sk-ant-…";
-  $("#cfg-model").value = cfg.claude_model;
+  $("#cfg-url").value = cfg.ollama_url;
+  $("#cfg-model").value = cfg.ollama_model;
   $("#cfg-whisper").value = cfg.whisper_model;
   $("#cfg-lang").value = cfg.lyrics_language || "";
   $("#cfg-tw").checked = !!cfg.convert_to_taiwan;
@@ -1945,18 +1944,18 @@ async function openSettings(focusUsage) {
   $("#cfg-kara").value = cfg.karaoke_model;
   $("#cfg-pitch").value = cfg.pitch_model;
   const m = st.modules;
-  const items = [["uvr", "AI 人聲分離"], ["crepe", "CREPE 音高"], ["whisper", "Whisper 歌詞辨識"], ["pedalboard", "高品質移調"], ["opencc", "台灣繁體轉換"], ["anthropic", "Claude 連線"], ["cuda", "顯示卡加速"]];
+  const items = [["uvr", "AI 人聲分離"], ["crepe", "CREPE 音高"], ["whisper", "Whisper 歌詞辨識"], ["pedalboard", "高品質移調"], ["opencc", "台灣繁體轉換"], ["ai_client", "AI 呼叫元件"], ["cuda", "顯示卡加速"]];
   $("#mods").innerHTML = items.map(([k, l]) => `<span class="chip ${m[k] ? "ok" : ""}">${m[k] ? "✓" : "✕"} ${l}</span>`).join("");
   $("#settings").hidden = false;
 }
 async function saveSettings(extra = {}) {
   try {
     await api("/api/config", { json: {
-      anthropic_api_key: $("#cfg-key").value, claude_model: $("#cfg-model").value.trim(),
+      ollama_url: $("#cfg-url").value.trim(), ollama_model: $("#cfg-model").value.trim(),
       whisper_model: $("#cfg-whisper").value, lyrics_language: $("#cfg-lang").value,
       convert_to_taiwan: $("#cfg-tw").checked, separation_model: $("#cfg-sep").value.trim(),
       karaoke_model: $("#cfg-kara").value.trim(), pitch_model: $("#cfg-pitch").value,
-      balance_usd: $("#cfg-balance").value.trim().replace(/^US\$|^\$/, ""), ...extra,
+      ...extra,
     } });
     $("#settings").hidden = true; toast("設定已儲存"); pollJobs();
   } catch (e) { toast(e.message); }
@@ -1964,7 +1963,6 @@ async function saveSettings(extra = {}) {
 $("#btn-settings").onclick = openSettings;
 $("#cfg-close").onclick = () => ($("#settings").hidden = true);
 $("#cfg-save").onclick = () => saveSettings();
-$("#cfg-clear-key").onclick = () => { $("#cfg-key").value = ""; saveSettings({ anthropic_api_key: "", clear_key: true }); };
 $("#settings").addEventListener("click", e => { if (e.target.id === "settings") $("#settings").hidden = true; });
 
 /* ------------------------------------------------------------ 啟動 */

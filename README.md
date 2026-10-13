@@ -10,7 +10,33 @@
 - 把你的錄音和合音、伴奏混音後**匯出 MP3／WAV、直式影片（旋律線條＋歌詞）或成績卡圖片**，一鍵開啟 FB、IG、X、Threads 分享
 - 歌曲庫可自訂分類（例如中文歌、日文歌）並用關鍵字搜尋
 
-歌曲處理都在本機完成（有 NVIDIA 顯示卡時用 GPU 加速）。只有兩個功能會連網使用 Claude，而且需要自己的 Anthropic API 金鑰：「Claude 精準對齊歌詞」和「練習建議」。
+歌曲處理都在本機完成（有 NVIDIA 顯示卡時用 GPU 加速）。「AI 精準對齊歌詞」與「練習建議」改由本機 Ollama 執行，無需 API 金鑰或雲端模型費用。
+
+## 本機模型分支（localModel）
+
+1. 安裝 [Ollama](https://ollama.com/download)，確認其服務正在執行。
+2. 執行 `ollama pull qwen2.5:14b`。模型約需 9GB 下載空間，建議 24GB 顯示記憶體；長上下文會增加記憶體需求。
+3. 在練唱台「設定」確認 Ollama 網址 `http://127.0.0.1:11434` 與模型 `qwen2.5:14b`。服務未啟動或模型未下載時，狀態會顯示不可用。
+4. 歌詞對齊使用 Ollama JSON Schema，練習建議使用繁體中文文字回覆。請先用短歌詞測試；模型效果不保證與雲端模型相同。
+
+每次呼叫完成後以 `keep_alive: 0` 釋放模型，減少與 Whisper／UVR 搶 GPU 記憶體。呼叫最多等待 10 分鐘。本機 token 紀錄保存在 `usage-local.json`，API 費用為零，未包含電力與硬體成本。Windows 安裝檔不會自動安裝 Ollama。
+
+## 從原始碼執行與測試
+
+Linux 後端使用 `requirements.txt`；Windows 桌面版使用 `requirements-win.txt` 並由原安裝流程處理 PyTorch。
+
+```sh
+python -m venv .venv
+# 啟用虛擬環境後：
+python -m pip install -r requirements.txt
+python app.py --no-browser
+```
+
+```sh
+python -m unittest discover -s tests -v
+```
+
+測試以模擬服務驗證請求格式、錯誤、用量、設定金鑰遮罩及 Flask 對齊／建議流程，不需付費金鑰或下載大型模型。實際 AI 品質仍需在安裝模型或提供 API 金鑰後檢驗。
 
 ## 安裝
 
@@ -42,14 +68,14 @@ sh installer/build.sh
 | `app.py` | 本機伺服器（Flask） |
 | `desktop.py` | 桌面視窗（pywebview），伺服器在另一個行程執行 |
 | `pipeline.py` | 分軌、音高、歌詞辨識、線上歌詞搜尋、歌曲庫 |
-| `claude_api.py` | 呼叫 Claude 並記錄 token 用量與費用 |
+| `ai_api.py` | 呼叫本機 AI 並記錄 token 用量與費用 |
 | `share.py` | 錄音混音、匯出音訊、直式影片與成績卡 |
 | `installer.py` | 安裝時偵測顯示卡、安裝套件、下載模型 |
 | `setup/install.ps1` | 安裝檔呼叫的 PowerShell 安裝腳本 |
 | `installer/leihu.nsi` | NSIS 安裝檔腳本 |
 | `static/` | 介面（HTML／JS／CSS）與使用說明 |
 
-API 金鑰、歌曲庫、用量紀錄都存在安裝資料夾裡的 `config.json`、`library/`、`usage.json`，不會被提交到這個 repo（見 `.gitignore`）。
+API 金鑰、歌曲庫、用量紀錄都存在安裝資料夾裡的 `config.json`、`library/`、`usage-local.json`，不會被提交到這個 repo（見 `.gitignore`）。
 
 ## 使用的開源專案
 

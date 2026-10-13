@@ -16,7 +16,7 @@
     <button id="nav-about" class="tab">關於開發者</button>
   </nav>
   <span class="spacer"></span>
-  <button id="claude-chip" class="chip" title="查看 Claude 用量">Claude：未設定</button>
+  <button id="ai-chip" class="chip" title="查看 本機 AI 用量">本機 AI：未設定</button>
   <button id="btn-settings" class="ghost">設定</button>
 </header>
 
@@ -214,10 +214,10 @@
           <div class="row"><button id="tap-hit" class="primary">這句開始</button><button id="tap-stop" class="ghost">結束打點</button></div>
         </div>
         <details>
-          <summary>貼上正確歌詞，用 Claude 對齊時間（需連網）</summary>
+          <summary>貼上正確歌詞，用本機 AI 對齊時間（Ollama）</summary>
           <div class="detail" style="margin-top:8px">
             <textarea id="ref-lyrics" placeholder="每行一句，照演唱順序貼上" style="min-height:120px"></textarea>
-            <div class="row"><button id="align">用 Claude 對齊</button><span id="align-state" class="hint"></span></div>
+            <div class="row"><button id="align">用本機 AI 對齊</button><span id="align-state" class="hint"></span></div>
             <span id="align-cost" class="hint"></span>
           </div>
         </details>
@@ -297,16 +297,12 @@
   <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="set-title">
     <h1 id="set-title">設定</h1>
     <div class="field"><span>已安裝的離線功能</span><div id="mods" class="mods"></div></div>
-    <label class="field"><span>Anthropic API 金鑰（只有對齊歌詞、練習建議會用到）</span>
-      <input id="cfg-key" type="password" autocomplete="off" placeholder="sk-ant-…"></label>
-    <label class="field"><span>Claude 模型</span><input id="cfg-model" type="text"></label>
+    <label class="field"><span>Ollama 服務網址</span><input id="cfg-url" type="url" placeholder="http://127.0.0.1:11434"></label>
+    <label class="field"><span>本機模型（先用 ollama pull 下載）</span><input id="cfg-model" type="text" placeholder="qwen2.5:14b"></label>
     <div id="usage" class="usage">
-      <div class="usage-head"><span>Claude 用量與費用</span><span class="hint">依官方價目估算，美元</span></div>
+      <div class="usage-head"><span>本機 AI 用量與費用</span><span class="hint">本機推論無 API 費用；電力與硬體成本另計</span></div>
       <div id="usage-grid" class="usage-grid"></div>
       <div id="usage-recent" class="usage-recent"></div>
-      <label class="field"><span>目前 API 餘額（US$）：到 Anthropic Console 的 Billing 頁面查看後填入，之後會自動扣掉這裡的花費</span>
-        <input id="cfg-balance" type="text" inputmode="decimal" placeholder="例如 12.50"></label>
-      <span class="hint">Anthropic 沒有提供查詢餘額的 API，所以剩餘金額是估計值。Console 網址：console.anthropic.com/settings/billing</span>
     </div>
     <label class="field"><span>歌詞辨識模型</span>
       <select id="cfg-whisper">
@@ -328,7 +324,7 @@
     <div class="row">
       <button id="cfg-save" class="primary">儲存</button>
       <button id="cfg-close" class="ghost">關閉</button>
-      <button id="cfg-clear-key" class="ghost danger">清除金鑰</button>
+
     </div>
   </div>
 </div>

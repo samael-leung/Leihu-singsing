@@ -47,8 +47,8 @@ DEFAULT_CONFIG = {
     "lyrics_language": "zh",
     "convert_to_taiwan": True,
     "pitch_model": "auto",
-    "claude_model": "claude-sonnet-5-5",
-    "anthropic_api_key": "",
+    "ollama_model": "qwen2.5:14b",
+    "ollama_url": "http://127.0.0.1:11434",
     "balance_usd": None,
     "balance_set_at": None,
 }
@@ -93,7 +93,7 @@ def module_status() -> dict:
         "whisper": has("faster_whisper"),
         "pedalboard": has("pedalboard"),
         "opencc": has("opencc"),
-        "anthropic": has("anthropic"),
+        "ai_client": True,
         "cuda": _cuda(),
     }
 
@@ -1521,7 +1521,7 @@ def import_lyrics(d: Path, text: str, cfg: dict, filename: str = "") -> tuple[st
         auto = d / "lyrics_auto.lrc"
         lrc = to_lrc(align_to_recognized(lines, d))
         how = "歌詞檔沒有時間，已依辨識結果自動對上每一句" if auto.exists() else \
-              "歌詞檔沒有時間，暫時每句間隔 3.5 秒，可以用「跟拍打點」或 Claude 對齊調整"
+              "歌詞檔沒有時間，暫時每句間隔 3.5 秒，可以用「跟拍打點」或 AI 對齊調整"
     if not lrc.strip():
         raise UserError("讀不到歌詞內容，請確認檔案格式（LRC、SRT 或 TXT）")
     if cfg.get("convert_to_taiwan", True) and re.search(r"[\u4e00-\u9fff]", lrc):

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import shutil
 import sys
@@ -14,7 +15,7 @@ from pathlib import Path
 
 from flask import Flask, abort, jsonify, request, send_file, send_from_directory
 
-import claude_api as C
+import ai_api as C
 import pipeline as P
 import share as SH
 
@@ -40,9 +41,8 @@ def index():
 
 @app.get("/api/status")
 def status():
-    cfg = P.load_config()
     return jsonify(version=VERSION, root=str(P.ROOT), modules=P.module_status(),
-                   claude_ready=bool(cfg.get("anthropic_api_key") or os.environ.get("ANTHROPIC_API_KEY")),
+                   ai_ready=C.ready(), ai_provider=C.PROVIDER,
                    session_cost=C.summary()["session"]["cost_usd"],
                    jobs=jobs.active() + vjobs.active())
 
@@ -50,9 +50,9 @@ def status():
 @app.get("/api/config")
 def get_config():
     cfg = P.load_config()
-    k = cfg.get("anthropic_api_key") or ""
-    cfg["anthropic_api_key"] = (k[:7] + "…" + k[-4:]) if len(k) > 12 else ""
-    cfg["has_key"] = bool(k or os.environ.get("ANTHROPIC_API_KEY"))
+    cfg.pop("anthropic_api_key", None)  # Never expose a legacy key.
+    cfg.pop("openai_api_key", None)  # A different branch may have saved this key.
+    cfg["has_key"] = False
     return jsonify(cfg)
 
 
@@ -71,13 +71,6 @@ def set_config():
             continue
         if k == "balance_set_at":
             continue
-        if k == "anthropic_api_key":
-            v = (body[k] or "").strip()
-            if v == "" or "…" in v:
-                if body.get("clear_key"):
-                    cfg[k] = ""
-                continue
-            cfg[k] = v
         else:
             cfg[k] = body[k]
     P.save_config(cfg)
@@ -459,7 +452,7 @@ def delete_take(sid, tid):
     return jsonify(ok=True)
 
 
-# ---------------------------------------------------------------- Claude（需要連線）
+# ---------------------------------------------------------------- 本機 AI（Ollama）
 
 ALIGN_TOOL = {
     "name": "set_line_times",
@@ -475,8 +468,8 @@ ALIGN_TOOL = {
 }
 
 
-@app.post("/api/songs/<sid>/claude/align")
-def claude_align(sid):
+@app.post("/api/songs/<sid>/ai/align")
+def ai_align(sid):
     """把使用者貼的正確歌詞，對到辨識出的時間與旋律段落上。"""
     d = P.song_dir(sid)
     ref = ((request.get_json(force=True) or {}).get("text") or "").strip()
@@ -507,7 +500,7 @@ def claude_align(sid):
         "資料三：使用者提供的正確歌詞，每行一句，順序就是演唱順序。\n\n"
         "請為資料三的每一行決定開始秒數，依據是內容與辨識結果的相似度，以及字數與樂句音符數的對應。"
         "秒數必須遞增。重複的段落（副歌）要對到各自出現的位置。"
-        f"用 set_line_times 工具回傳，times 必須剛好 {n} 個數字。\n\n"
+        f"回傳 JSON 物件，times 必須剛好 {n} 個數字。\n\n"
         "資料一：\n" + "\n".join(f"{l['t']:.2f}\t{l['text']}" for l in heard if l["t"] is not None)
         + "\n\n資料二：\n" + "\n".join(f"{s:.2f}\t{e:.2f}\t{k}" for s, e, k in phrases)
         + f"\n\n資料三（共 {n} 行）：\n" + "\n".join(f"{i + 1}. {t}" for i, t in enumerate(ref_lines))
@@ -515,23 +508,24 @@ def claude_align(sid):
     data, usage = C.ask_tool(prompt, tool, 8000, "align", meta.get("title", ""))
     times = data.get("times") or []
     if len(times) != n:
-        raise P.UserError(f"Claude 回傳了 {len(times)} 個時間，但歌詞有 {n} 行。再試一次。")
+        raise P.UserError(f"本機 AI 回傳了 {len(times)} 個時間，但歌詞有 {n} 行。再試一次。")
     dur = float(meta.get("duration") or 1e9)
-    clean, prev = [], -1.0
-    for t in times:   # 確保遞增、不超出歌曲長度
-        t = min(max(float(t), prev + 0.3, 0.0), dur)
-        clean.append(round(t, 2))
-        prev = t
+    if any(isinstance(t, bool) or not isinstance(t, (int, float))
+           or not math.isfinite(t) or t < 0 or t > dur for t in times):
+        raise P.UserError("AI 回傳的歌詞時間超出歌曲範圍或格式不正確。")
+    clean = [round(t, 2) for t in times]
+    if any(b <= a for a, b in zip(clean, clean[1:])):
+        raise P.UserError("AI 回傳的歌詞時間沒有遞增，請再試一次。")
     lrc = P.to_lrc([{"t": t, "text": txt} for t, txt in zip(clean, ref_lines)])
     (d / "lyrics.lrc").write_text(lrc, "utf-8")
     meta["steps"]["lyrics"] = True
-    meta["lyrics_source"] = "claude"
+    meta["lyrics_source"] = C.PROVIDER
     P.write_meta(d, meta)
     return jsonify(lrc=lrc, usage=usage)
 
 
-@app.post("/api/songs/<sid>/claude/coach")
-def claude_coach(sid):
+@app.post("/api/songs/<sid>/ai/coach")
+def ai_coach(sid):
     d = P.song_dir(sid)
     tid = (request.get_json(force=True) or {}).get("take")
     _, j, _ = _take_paths(sid, tid or "")
