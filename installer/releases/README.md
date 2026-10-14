@@ -1,4 +1,19 @@
-# Windows AI 選擇版 1.4.4
+# Windows AI 選擇版 1.4.5 — 點歌系統雙向同步
+
+- **已有 1.4.4／1.4.5 安裝：[只更新程式的 .exe](./LeihuLiantai-windows-ai-choice-1.4.5-Update.exe)**
+- [首次安裝／修復用完整安裝檔](./LeihuLiantai-windows-ai-choice-1.4.5-Setup.exe)
+- [完整移除工具](./LeihuLiantai-windows-ai-choice-1.4.5-CleanUninstall.exe)
+
+已有 Windows AI 選擇版不需要解除安裝或重裝執行環境。請先儲存錄音、關閉練唱台，執行 **Update.exe** 並選擇原本安裝資料夾。程式更新檔只更新程式，不會下載或安裝 Python、套件、模型或其他軟體，也不會覆蓋歌曲庫、錄音、API 金鑰與設定。未完成安裝或更舊版本請使用 Setup.exe。完整安裝檔的「更新」模式會沿用既有資料並檢查相依套件；若只需這次功能，優先使用 Update.exe。
+
+更新後，在練唱台勾選「同步點歌系統『正在播放』」。搭配 `samael-leung/twitch-song-request-system` 的 `feat/leihu-song-request-sync` 分支，沿用其最新上游瀏覽器設定精靈與授權流程；不需通道或額外同步軟體。雙向選歌、原歌曲保留、重複事件與版本衝突處理均包含在此版本。
+
+建置來源：`b9fb020cbe89d372753a09d2677faedec723da15`，NSIS 3.11。SHA-256 見 [SHA256SUMS](./SHA256SUMS)。已驗證編譯、封裝完整性、同步檔案與來源一致，以及更新檔不包含執行環境／使用者資料；同步測試及實際 Chromium 雙向操作通過。Windows 安裝與更新 GUI 仍需實機驗證。安裝檔未簽章。
+
+---
+
+## 歷史版本 1.4.4
+
 
 - [安裝檔](./LeihuLiantai-windows-ai-choice-1.4.4-Setup.exe)
 - [完整移除工具](./LeihuLiantai-windows-ai-choice-1.4.4-CleanUninstall.exe)
