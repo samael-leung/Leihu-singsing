@@ -12,4 +12,5 @@ LANG=C.UTF-8 LC_ALL=C.UTF-8 makensis -V2 -DLOCAL_MODEL clean-uninstall.nsi
 cp "out/LeihuLiantai-windows-ai-choice-${app_version}-CleanUninstall.exe" payload/clean-uninstall.exe
 cp license.txt payload/版權與使用聲明.txt
 LANG=C.UTF-8 LC_ALL=C.UTF-8 makensis -V2 leihu.nsi
+LANG=C.UTF-8 LC_ALL=C.UTF-8 makensis -V2 update.nsi
 ls -la out
