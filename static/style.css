@@ -329,3 +329,6 @@ a.tab { text-decoration: none; font-size: 14px; }
 .playlist-result { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; padding: 8px; border-bottom: 1px solid var(--line); }
 .playlist-result span { overflow-wrap: anywhere; }
 .playlist-result .hint { grid-column: 1 / -1; }
+.song-request-controls { flex-wrap: wrap; }
+#song-request-choices { flex-wrap: wrap; min-width: 0; max-width: 100%; }
+#song-request-choices button { max-width: 480px; white-space: normal; text-align: left; overflow-wrap: anywhere; }

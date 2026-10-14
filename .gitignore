@@ -25,3 +25,5 @@ installer/out/
 !installer/releases/*.exe
 
 usage-ai-choice.json
+song-request-links.json
+song-request-links.json.tmp

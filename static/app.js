@@ -2231,14 +2231,34 @@ api("/api/config").then(cfg => { if (!cfg.ai_setup_complete) openSettings(); }).
 
 const songRequestSync = new SongRequestSync({
   request: body => api('/api/song-request/selection', body ? { json: body } : {}),
-  listSongs: () => api('/api/songs'),
+  listSongs: () => api('/api/song-request/library'),
+  listRequestSongs: () => api('/api/song-request/catalog'),
+  loadLinks: () => api('/api/song-request/links'),
+  saveLink: link => api('/api/song-request/links', { json: link }),
   openSong: id => S.song?.id === id ? Promise.resolve() : openSong(id, true),
   status: message => { $('#song-request-status').textContent = message; },
+  choices: songs => {
+    const target = $('#song-request-choices');
+    const choiceKey = JSON.stringify(songs.map(song => [song.id, song.title]));
+    if (target.dataset.choices === choiceKey) return;
+    target.dataset.choices = choiceKey;
+    target.replaceChildren();
+    for (const song of songs) {
+      const button = document.createElement('button');
+      button.className = 'ghost';
+      button.textContent = song.title;
+      button.onclick = () => songRequestSync.confirm(song);
+      target.appendChild(button);
+    }
+  },
 });
 const songRequestEnabled = $('#song-request-enabled');
+$('#song-request-review').onclick = () => songRequestSync.review();
 songRequestEnabled.checked = store.get('songRequestEnabled', false);
+$('#song-request-review').disabled = !songRequestEnabled.checked;
 songRequestSync.setEnabled(songRequestEnabled.checked);
 songRequestEnabled.onchange = () => {
+  $('#song-request-review').disabled = !songRequestEnabled.checked;
   store.set('songRequestEnabled', songRequestEnabled.checked);
   songRequestSync.setEnabled(songRequestEnabled.checked);
   // Invalidate an external selection that is still loading when sync is disabled.
