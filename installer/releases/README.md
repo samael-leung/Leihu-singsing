@@ -1,4 +1,18 @@
-# Windows AI 選擇版 1.4.5 — 點歌系統雙向同步
+# Windows AI 選擇版 1.4.6 — YouTube 歌名自動對應
+
+- **已有 1.4.4／1.4.5／1.4.6：[程式更新檔 Update.exe](./LeihuLiantai-windows-ai-choice-1.4.6-Update.exe)**
+- [首次安裝／修復用 Setup.exe](./LeihuLiantai-windows-ai-choice-1.4.6-Setup.exe)
+- [完整移除工具](./LeihuLiantai-windows-ai-choice-1.4.6-CleanUninstall.exe)
+
+先儲存錄音並關閉練唱台，再執行 Update.exe 選原安裝資料夾；不用重裝 Python、套件或模型。更新會保留歌曲、設定與 `song-request-links.json` 對應紀錄。**點歌系統也須更新到 `feat/leihu-song-request-sync` 分支最新版**，才能完整支援只綁定對應、保留原點歌項目的行為。
+
+本版會清理 YouTube 歌詞／Official MV／HD 標記，結合歌手、曲名中繼資料及繁簡體別名自動尋找歌曲。例如「下一個天亮」會對應「郭靜 下一個天亮 歌詞」。同名或版本無法區分時，點候選確認一次即可；對應會保存在本機，重新啟動仍可沿用，並可按「更改對應」修正。反向選歌使用正式歌名與已保存的對應，避免建立重複歌曲。不需要新增軟體或相依套件。
+
+來源：`e4b33080f4d08fc94544baea7837641b6d87116e`，使用 NSIS 3.11 建置。點歌系統 7 項、練唱台 16 項測試通過，並以實際 Flask／Node 程式與 Chromium 驗證截圖案例、自動對應、一次確認、重新載入記憶及保留原點歌資訊。封裝內容與來源比對及 SHA-256 檢查通過，見 [SHA256SUMS](./SHA256SUMS)。Windows 安裝 GUI 仍需實機驗證；安裝檔未簽章。
+
+---
+
+## Windows AI 選擇版 1.4.5 — 點歌系統雙向同步
 
 - **已有 1.4.4／1.4.5 安裝：[只更新程式的 .exe](./LeihuLiantai-windows-ai-choice-1.4.5-Update.exe)**
 - [首次安裝／修復用完整安裝檔](./LeihuLiantai-windows-ai-choice-1.4.5-Setup.exe)
