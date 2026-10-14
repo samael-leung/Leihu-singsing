@@ -21,11 +21,13 @@ import youtube_playlist as YP
 import model_setup as MS
 import pipeline as P
 import share as SH
+import song_request
 
 VERSION = "1.4.4"
 HOST, PORT = "127.0.0.1", int(os.environ.get("LIANTAI_PORT", "8765"))
 app = Flask(__name__, static_folder=str(P.ROOT / "static"), static_url_path="/static")
 app.config["MAX_CONTENT_LENGTH"] = 1024 * 1024 * 1024
+song_request.register(app)
 jobs = P.Jobs()
 vjobs = P.Jobs()   # 移調／變速另外排隊：不會被分軌、評分卡住，也不會卡住它們
 

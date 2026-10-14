@@ -21,6 +21,10 @@
 </header>
 
 <main>
+  <div class="row">
+    <label><input type="checkbox" id="song-request-enabled"> 同步點歌系統「正在播放」</label>
+    <span id="song-request-status" class="hint" role="status">未啟用</span>
+  </div>
   <!-- 歌曲庫 -->
   <section id="view-lib">
     <div class="lib-head">
@@ -407,6 +411,7 @@
   </div>
 </div>
 <div id="toast" class="toast" role="status" hidden></div>
+<script src="/static/song-request.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

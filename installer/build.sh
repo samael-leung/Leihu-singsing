@@ -4,8 +4,8 @@ set -e
 cd "$(dirname "$0")"
 app_version=$(tr -d "\r\n" < ../VERSION)
 rm -rf payload && mkdir -p payload/static payload/setup out
-cp ../app.py ../youtube_playlist.py ../forced_alignment.py ../alignment_worker.py ../desktop.py ../installer.py ../pipeline.py ../ai_api.py ../ollama_setup.py ../model_setup.py ../share.py ../VERSION ../requirements-win.txt payload/
-cp ../static/index.html ../static/app.js ../static/style.css ../static/help.html ../static/overlay.html ../static/icon.ico ../static/kenzi.png ../static/linepay.png payload/static/
+cp ../app.py ../song_request.py ../youtube_playlist.py ../forced_alignment.py ../alignment_worker.py ../desktop.py ../installer.py ../pipeline.py ../ai_api.py ../ollama_setup.py ../model_setup.py ../share.py ../VERSION ../requirements-win.txt payload/
+cp ../static/index.html ../static/app.js ../static/song-request.js ../static/style.css ../static/help.html ../static/overlay.html ../static/icon.ico ../static/kenzi.png ../static/linepay.png payload/static/
 cp ../static/help.html payload/使用說明.html
 cp ../setup/install.ps1 ../setup/clean-uninstall.ps1 payload/setup/
 LANG=C.UTF-8 LC_ALL=C.UTF-8 makensis -V2 -DLOCAL_MODEL clean-uninstall.nsi

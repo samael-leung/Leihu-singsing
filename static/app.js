@@ -447,42 +447,56 @@ async function repitch(id) {
   catch (e) { toast(e.message); }
 }
 
-async function openSong(id) {
-  pause();
-  stopTap();
-  const [song, pitch, lyr] = await Promise.all([
-    api(`/api/songs/${id}`), api(`/api/songs/${id}/pitch`), api(`/api/songs/${id}/lyrics`),
-  ]);
-  S.song = song; titles[id] = song.title;
-  S.pitch = { hop: pitch.hop, midi: Float32Array.from(pitch.midi, v => (v == null ? NaN : v)) };
-  S.notes = pitch.notes.map(([s, e, m]) => ({ s, e, m }));
-  S.autoLrc = lyr.auto;
-  $("#lrc").value = lyr.lrc;
-  setLines(lyr.lrc);
-  const saved = store.get(`song:${id}`, {});
-  S.key = clamp(saved.key || 0, -6, 6); S.speed = saved.speed || 1;
-  if (saved.vol) Object.assign(S.vol, saved.vol);
-  S.t = 0; S.loopA = S.loopB = null; S.live = []; S.take = null; S.takeBuf = null;
-  keyHintReset();
-  computeRange();
-  $("#p-title").textContent = song.title;
-  $("#p-chips").innerHTML = `<span class="chip ${song.separation === "uvr" ? "ok" : "warn"}">${song.separation === "uvr" ? "AI 分軌" : "聲像分軌"}</span>`
-    + (song.acapella ? `<span class="chip acap">清唱／純人聲</span>` : "")
-    + (song.steps?.pitch && !(song.pitch_algo >= 2) ? `<button class="chip warn chip-btn" id="p-repitch" title="這首歌的旋律是舊版分析的，重新分析可以補上斷掉的旋律、修正句尾忽然跳高的音">更新旋律分析</button>` : "");
-  if ($("#p-repitch")) $("#p-repitch").onclick = () => repitch(id);
-  $("#ls-results").innerHTML = ""; $("#ls-msg").textContent = ""; $("#ls-q").value = "";
-  S.editLyr = false; syncLyrButtons();
-  checkCandidates(id);
+let songOpenRequest = 0;
+async function openSong(id, fromSongRequest = false) {
+  const requestId = ++songOpenRequest;
+  if (!fromSongRequest) songRequestSync.beginSelection();
+  try {
+    pause();
+    stopTap();
+    const [song, pitch, lyr] = await Promise.all([
+      api(`/api/songs/${id}`), api(`/api/songs/${id}/pitch`), api(`/api/songs/${id}/lyrics`),
+    ]);
+    if (requestId !== songOpenRequest) return;
+    S.song = song; titles[id] = song.title;
+    if (!fromSongRequest) {
+      songRequestSync.selected(song);
+      songRequestSync.endSelection();
+    }
+    S.pitch = { hop: pitch.hop, midi: Float32Array.from(pitch.midi, v => (v == null ? NaN : v)) };
+    S.notes = pitch.notes.map(([s, e, m]) => ({ s, e, m }));
+    S.autoLrc = lyr.auto;
+    $("#lrc").value = lyr.lrc;
+    setLines(lyr.lrc);
+    const saved = store.get(`song:${id}`, {});
+    S.key = clamp(saved.key || 0, -6, 6); S.speed = saved.speed || 1;
+    if (saved.vol) Object.assign(S.vol, saved.vol);
+    S.t = 0; S.loopA = S.loopB = null; S.live = []; S.take = null; S.takeBuf = null;
+    keyHintReset();
+    computeRange();
+    $("#p-title").textContent = song.title;
+    $("#p-chips").innerHTML = `<span class="chip ${song.separation === "uvr" ? "ok" : "warn"}">${song.separation === "uvr" ? "AI 分軌" : "聲像分軌"}</span>`
+      + (song.acapella ? `<span class="chip acap">清唱／純人聲</span>` : "")
+      + (song.steps?.pitch && !(song.pitch_algo >= 2) ? `<button class="chip warn chip-btn" id="p-repitch" title="這首歌的旋律是舊版分析的，重新分析可以補上斷掉的旋律、修正句尾忽然跳高的音">更新旋律分析</button>` : "");
+    if ($("#p-repitch")) $("#p-repitch").onclick = () => repitch(id);
+    $("#ls-results").innerHTML = ""; $("#ls-msg").textContent = ""; $("#ls-q").value = "";
+    S.editLyr = false; syncLyrButtons();
+    checkCandidates(id);
 
-  $("#speed").value = String(S.speed);
-  $("#key-sel").value = String(S.key);
-  $("#nav-practice").disabled = false;
-  renderFaders();
-  renderTakes(song.takes);
-  $("#take-detail").innerHTML = "";
-  $("#exp-msg").textContent = ""; $("#exp-show").hidden = true; $("#align-cost").textContent = ""; $("#align-state").textContent = "";
-  show("practice");
-  await loadAudio();
+    $("#speed").value = String(S.speed);
+    $("#key-sel").value = String(S.key);
+    $("#nav-practice").disabled = false;
+    renderFaders();
+    renderTakes(song.takes);
+    $("#take-detail").innerHTML = "";
+    $("#exp-msg").textContent = ""; $("#exp-show").hidden = true; $("#align-cost").textContent = ""; $("#align-state").textContent = "";
+    show("practice");
+    // A slow audio conversion must not block newer selections from the queue.
+    if (fromSongRequest) loadAudio();
+    else await loadAudio();
+  } finally {
+    if (!fromSongRequest && requestId === songOpenRequest) songRequestSync.endSelection();
+  }
 }
 
 /* 整首歌的音域：用音高曲線的分布（不只音符），避免短促的高音被排除在外 */
@@ -2214,3 +2228,24 @@ pollJobs();
 requestAnimationFrame(frame);
 
 api("/api/config").then(cfg => { if (!cfg.ai_setup_complete) openSettings(); }).catch(e => toast(e.message));
+
+const songRequestSync = new SongRequestSync({
+  request: body => api('/api/song-request/selection', body ? { json: body } : {}),
+  listSongs: () => api('/api/songs'),
+  openSong: id => S.song?.id === id ? Promise.resolve() : openSong(id, true),
+  status: message => { $('#song-request-status').textContent = message; },
+});
+const songRequestEnabled = $('#song-request-enabled');
+songRequestEnabled.checked = store.get('songRequestEnabled', false);
+songRequestSync.setEnabled(songRequestEnabled.checked);
+songRequestEnabled.onchange = () => {
+  store.set('songRequestEnabled', songRequestEnabled.checked);
+  songRequestSync.setEnabled(songRequestEnabled.checked);
+  // Invalidate an external selection that is still loading when sync is disabled.
+  songOpenRequest++;
+  songRequestSync.endSelection();
+  $('#song-request-status').textContent = songRequestEnabled.checked ? '連線中…' : '未啟用';
+  songRequestSync.tick();
+};
+setInterval(() => songRequestSync.tick(), 1000);
+songRequestSync.tick();
