@@ -1,4 +1,20 @@
-# Windows AI 選擇版 1.4.6 — YouTube 歌名自動對應
+# 整合版 1.4.7 — 合併原作者更新，保留完整點歌同步功能
+
+**此版本及後續更新只發佈到 `leihu-song-request-sync` 分支。**
+
+- **已有 1.4.4～1.4.7：[程式更新檔 Update.exe](./LeihuLiantai-windows-ai-choice-1.4.7-Update.exe)**
+- [首次安裝／修復用 Setup.exe](./LeihuLiantai-windows-ai-choice-1.4.7-Setup.exe)
+- [完整移除工具](./LeihuLiantai-windows-ai-choice-1.4.7-CleanUninstall.exe)
+
+已合併原作者 `LeihuTW/Leihu-singsing` 的 1.4.5（`18755f8`），包含高品質主唱／合音分離、音量標準化、處理停止／取消及有時間上限的歌詞搜尋。同時保留本機／Claude／Gemini／OpenAI 選擇、YouTube 播放清單批量匯入、音訊強制對齊、雙向點歌同步、YouTube 歌名自動比對、一次確認及記住對應。
+
+請先儲存錄音、關閉程式，再用 Update.exe 選原安裝資料夾；不必重裝 Python、套件或模型，歌曲、設定及 `song-request-links.json` 都會保留。上游高品質分離模型首次使用可能下載約 900 MB；如要沿用現有模型，在設定的主唱分離品質選「標準」。CPU 的自動模式預設使用標準模型。
+
+合併來源：`33cc693db137beced2b742a67db7681a7f74544f`，NSIS 3.11 建置。96 項 Python 測試及 11 項同步 JavaScript 測試通過，另有 3 項 Python 測試依 AI 模式跳過；設定／歌詞顯示 smoke 及 Chromium 雙向同步、音量標準化音訊線路與品質設定驗證通過。CTC 真實模型推論、實際 GPU 分離與 Windows 安裝 GUI 未在本次雲端驗證。高品質失敗退回標準、音量計算、取消工作和舊資料保留已驗證。封裝內容與來源、SHA-256 檢查通過，見 [SHA256SUMS](./SHA256SUMS)；安裝檔未簽章。
+
+---
+
+## Windows AI 選擇版 1.4.6 — YouTube 歌名自動對應
 
 - **已有 1.4.4／1.4.5／1.4.6：[程式更新檔 Update.exe](./LeihuLiantai-windows-ai-choice-1.4.6-Update.exe)**
 - [首次安裝／修復用 Setup.exe](./LeihuLiantai-windows-ai-choice-1.4.6-Setup.exe)
