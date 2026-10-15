@@ -1,6 +1,6 @@
 # 雷虎練唱台
 
-在自己電腦上跑的 Windows 練歌工具。匯入一首歌（音訊檔或 YouTube 網址），它會：
+在自己電腦上跑的練歌工具，支援 Windows 及 Apple Silicon Mac。匯入一首歌（音訊檔或 YouTube 網址），它會：
 
 - 用 AI 模型把歌拆成**主唱、合音、伴奏**三軌（有顯示卡時用高品質 Roformer 模型分離主唱與合音）
 - 分析主唱的**旋律**，可切換「原聲曲線」或「音符區塊」顯示
@@ -23,6 +23,29 @@
 本機模式按「儲存」後才會沿用或安裝 Ollama、自動選模、下載並驗證回覆。下載中斷可再次儲存續傳。Ollama 官方 Windows 安裝檔會驗證 Authenticode 簽章，不會繞過驗證。API 模式不需要 Ollama，也不會下載本機語言模型。
 
 Windows 10 22H2／11 64 位元，音訊套件建議預留約 8 GB，選本機模式時另外預留模型與 Ollama 空間（依模型約 2–13 GB）。NVIDIA 的音訊加速依驅動與 PyTorch 相容性決定，會測試運算並在必要時退回 CPU。
+
+## macOS（Apple Silicon，整合版 1.4.8）
+
+本 Mac 整合分支為 `feat/leihu-song-request-sync-macos`，從 Windows／同步整合版 `7553634` 分出，包含上游 USB 麥克風修正，並保留 AI 選擇、歌詞強制對齊、YouTube 播放清單、雙向點歌同步、模糊比對及永久配對。不必切換至舊的 Mac 分支。
+
+需要 **macOS 14 或更新版本、Apple Silicon 原生 arm64**（不要以 Rosetta 執行）。先從 [Homebrew 官網](https://brew.sh) 安裝 Homebrew，並執行 `xcode-select --install` 完成 Command Line Tools。將整個專案放在可寫入的位置，例如 `~/Applications/Leihu-singsing`；勿放在唯讀磁碟映像或系統目錄。
+
+```bash
+# 在專案資料夾執行；也可雙擊 Install-Mac.command
+bash setup/install-mac.sh
+# 安裝完成後；也可雙擊 Start-Mac.command
+bash setup/start-mac.sh
+```
+
+安裝會透過 Homebrew 準備 Python 3.11、ffmpeg、編譯工具及 libsndfile，套件放在專案的 `.venv`。首次開啟請選 AI 模式；API 模式不安裝 Ollama，只有選本機模式並儲存才準備 Ollama 與語言模型。已有官方 Ollama.app 或 Homebrew Ollama 時會沿用。設定頁會依共享記憶體建議模型，32 GB Mac 預設建議 7B。
+
+預設在瀏覽器開啟，建議使用最新版 Chrome；允許瀏覽器的麥克風權限，並在 macOS「系統設定 → 隱私權與安全性 → 麥克風」允許該瀏覽器。錄音可使用瀏覽器版，直播歌詞仍可供 OBS 使用。選用桌面視窗：`bash setup/start-mac.sh desktop`，其麥克風權限由 WebKit／macOS 管理。瀏覽器版結束後在啟動的終端機按 Ctrl+C 停止伺服器。
+
+Mac 音訊分離採 CPU 並隔離在子程序，避開 ONNX CoreML／MPS 的原生崩潰；取消與崩潰不會關閉主程式。高品質主唱分離選項及標準模型備援仍保留，但 CPU 處理較慢，預設自動模式使用標準品質。音高與 CTC 強制對齊使用 CPU；Whisper 透過 CTranslate2 的 CPU 路徑執行。Ollama 的 Apple GPU 加速由 Ollama 管理，不代表音訊流程使用 Metal。
+
+更新時保留原資料夾，在此 Mac 分支執行 `git pull --ff-only`，再重跑安裝腳本。腳本不刪除或重建歌曲、錄音、`config.json`、`song-request-links.json` 或模型。若原 `.venv` 不是 Python 3.11／arm64，安裝會停止並提示；先將該 `.venv` 重新命名留存，再重跑安裝，無需移除使用者資料。Windows 的 `.exe` 無法在 Mac 執行；本次提供原始碼與 `.command` 啟動方式，未提供簽章／公證的 `.app`。
+
+Linux 驗證包含 Mac CPU provider、分離子程序崩潰隔離／取消、路徑含空白的啟動、非 Mac／Rosetta／舊系統安裝保護，以及既有功能回歸；已確認主要依賴提供 Python 3.11／arm64 Mac wheel。Homebrew 的完整安裝、實體麥克風、WebKit、正式分離模型及 macOS 系統權限仍需 Mac 實機測試。
 
 ## AI 模式與設定
 
@@ -69,7 +92,7 @@ node tests/overlay_smoke.js
 python app.py --no-browser
 ```
 
-Windows 安裝檔以 `sh installer/build.sh` 建置，需要 NSIS。Mac 請使用 [macos-ai-choice 分支](https://github.com/samael-leung/Leihu-singsing/tree/macos-ai-choice)。Linux 環境已驗證模擬三家 API 的請求／回應、切換供應商、金鑰隱藏、硬體選模、下載失敗與恢復、設定介面及清理邏輯。尚未以真實 API 額度測試三家模型，也尚未驗證 Windows GUI／GPU 與 Mac Homebrew／Metal／麥克風。
+Windows 安裝檔以 `sh installer/build.sh` 建置，需要 NSIS。本分支已包含 Apple Silicon Mac 安裝與啟動腳本，見上方 macOS 說明。Linux 環境已驗證模擬三家 API 的請求／回應、切換供應商、金鑰隱藏、硬體選模、下載失敗與恢復、設定介面及清理邏輯。尚未以真實 API 額度測試三家模型，也尚未驗證 Windows GUI／GPU 與 Mac Homebrew／Metal／麥克風。
 
 ## 使用的開源專案
 
@@ -127,7 +150,7 @@ Windows 安裝檔以 `sh installer/build.sh` 建置，需要 NSIS。Mac 請使�
 
 本版合併原作者 `LeihuTW/Leihu-singsing` 的 1.4.5（`18755f8`）：高品質主唱／合音分離、播放音量標準化、處理佇列的停止／取消，以及有時間上限的歌詞搜尋。保留本機／Claude／Gemini／OpenAI 選擇、音訊強制對齊、YouTube 播放清單批量匯入、點歌系統雙向同步、YouTube 歌名自動比對及記住對應。
 
-後續更新只發佈至本儲存庫的 `leihu-song-request-sync` 分支。已有 1.4.4～1.4.6 安裝可使用 1.4.7 Update.exe 更新程式，不用重新安裝執行環境；歌曲、API 設定與歌曲對應紀錄保留。上游的高品質分離模型首次使用可能需要下載約 900 MB；可在設定選「標準」沿用原本模型，自動模式只在顯示卡可用時使用高品質。
+Windows 整合版維護於 `feat/leihu-song-request-sync` 分支，Mac 整合版維護於 `feat/leihu-song-request-sync-macos`。已有 1.4.4～1.4.6 安裝可使用 1.4.7 Update.exe 更新程式，不用重新安裝執行環境；歌曲、API 設定與歌曲對應紀錄保留。上游的高品質分離模型首次使用可能需要下載約 900 MB；可在設定選「標準」沿用原本模型，自動模式只在顯示卡可用時使用高品質。
 
 ## 整合版 1.4.8
 

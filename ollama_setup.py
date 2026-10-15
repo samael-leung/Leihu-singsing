@@ -14,6 +14,12 @@ from urllib.request import Request, urlopen
 
 def find_ollama() -> Path | None:
     candidates = [shutil.which("ollama")]
+    if sys.platform == "darwin":
+        candidates.extend([
+            "/opt/homebrew/bin/ollama", "/usr/local/bin/ollama",
+            "/Applications/Ollama.app/Contents/Resources/ollama",
+            str(Path.home() / "Applications/Ollama.app/Contents/Resources/ollama"),
+        ])
     local = os.environ.get("LOCALAPPDATA")
     if local:
         candidates.append(str(Path(local) / "Programs" / "Ollama" / "ollama.exe"))

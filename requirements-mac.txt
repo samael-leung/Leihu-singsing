@@ -1,0 +1,10 @@
+# Python 3.11；不安裝 Windows 的 pythonnet 或 CUDA runtime。
+-r requirements.txt
+numpy>=2,<3
+torchaudio
+torchvision
+pillow>=10
+# 選用桌面視窗；錄音建議用瀏覽器版。
+pywebview>=6,<7
+# The CPU-provider override is tested against this Separator API.
+audio-separator[cpu]==0.47.0

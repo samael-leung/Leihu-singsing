@@ -18,6 +18,7 @@ import os
 import queue
 import re
 import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -551,17 +552,95 @@ def karaoke_model(cfg: dict) -> str:
 
 
 def separate_uvr(d: Path, cfg: dict, report) -> None:
+    if sys.platform == 'darwin':
+        return _separate_uvr_worker(d, cfg, report)
+    return _separate_uvr_direct(d, cfg, report)
+
+
+def _separate_uvr_worker(d: Path, cfg: dict, report) -> None:
+    """Native-library crashes must not terminate the Mac web server."""
+    report('Mac CPU 分離人聲與伴奏（第一次會下載模型）', 0.08)
+    (ROOT / 'logs').mkdir(exist_ok=True)
+    # Pass only model filenames, never API credentials from the full config.
+    payload = {'song_dir': str(d.resolve()), 'parent_pid': os.getpid(), 'models': {
+        key: cfg[key] for key in ('separation_model', 'karaoke_model', 'karaoke_quality')}}
+    proc = subprocess.Popen([sys.executable, '-u', str(ROOT / 'uvr_worker.py')],
+                            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace',
+                            env=dict(os.environ, PYTHONFAULTHANDLER='1'))
+    lines = queue.Queue()
+    def read_output():
+        try:
+            for line in proc.stdout:
+                lines.put(line)
+        finally:
+            lines.put(None)
+    reader = threading.Thread(target=read_output, daemon=True)
+    reader.start()
+    try:
+        proc.stdin.write(json.dumps(payload) + '\n')
+        proc.stdin.close()
+        step, progress = 'Mac CPU 分離人聲與伴奏', 0.08
+        with open(ROOT / 'logs/uvr-worker.log', 'a', encoding='utf-8') as log:
+            while True:
+                try:
+                    line = lines.get(timeout=0.2)
+                except queue.Empty:
+                    # Jobs.report checks cancellation even while native inference is silent.
+                    report(step, progress)
+                    continue
+                if line is None:
+                    break
+                log.write(line)
+                log.flush()
+                if line.startswith('LEIHU_UVR_PROGRESS '):
+                    event = json.loads(line[len('LEIHU_UVR_PROGRESS '):])
+                    step, progress = event['step'], float(event['progress'])
+                report(step, progress)
+        code = proc.wait()
+        if code:
+            raise UserError(f'分離子程序異常結束（{code}）；詳情見 logs/uvr-worker.log，主程式仍可使用。')
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+        reader.join(timeout=5)
+        proc.stdout.close()
+        if not proc.stdin.closed:
+            proc.stdin.close()
+
+
+def _uvr_separator(cpu_only: bool, **kwargs):
+    from audio_separator.separator import Separator
+    if not cpu_only:
+        return Separator(**kwargs)
+
+    class CpuSeparator(Separator):
+        def setup_torch_device(self, system_info):
+            import torch
+            self.torch_device_cpu = torch.device('cpu')
+            self.torch_device = self.torch_device_cpu
+            self.torch_device_mps = None
+            self.onnx_execution_provider = ['CPUExecutionProvider']
+            self.logger.info('Mac 分軌使用 CPU，避開 CoreML／MPS 原生函式庫崩潰')
+
+    return CpuSeparator(**kwargs)
+
+
+def _separate_uvr_direct(d: Path, cfg: dict, report, cpu_only: bool = False) -> None:
     try:
         import torch  # noqa: F401  先載入 PyTorch 的 CUDA 函式庫，ONNX 會沿用同一份
     except Exception:
         pass
-    from audio_separator.separator import Separator
-
     tmp = d / "_sep"
     shutil.rmtree(tmp, ignore_errors=True)
     tmp.mkdir()
     (MODELS / "uvr").mkdir(parents=True, exist_ok=True)
-    sep = Separator(output_dir=str(tmp), model_file_dir=str(MODELS / "uvr"),
+    sep = _uvr_separator(cpu_only, output_dir=str(tmp), model_file_dir=str(MODELS / "uvr"),
                     output_format="WAV", sample_rate=SR)
 
     report("分離人聲與伴奏（第一次會下載模型）", 0.08)
