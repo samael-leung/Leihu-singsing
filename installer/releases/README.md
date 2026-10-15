@@ -1,3 +1,21 @@
+# 整合版 1.4.8 — 上游 USB 麥克風修正
+
+**只發佈到 `leihu-song-request-sync` 分支。**
+
+- **已有 1.4.7：[下載 Update.exe](./LeihuLiantai-windows-ai-choice-1.4.8-Update.exe)**（亦支援 Windows AI 選擇版 1.4.4～1.4.8）
+- [首次安裝／修復用 Setup.exe](./LeihuLiantai-windows-ai-choice-1.4.8-Setup.exe)
+- [完整移除工具](./LeihuLiantai-windows-ai-choice-1.4.8-CleanUninstall.exe)（不是更新工具）
+
+上游 main `ba4a84cbc1cce4e18b80547ae4f23cfc54387d6d`（1.4.6）在既有整合版 1.4.7 上新增 USB 麥克風修正：收音與音樂播放改用獨立 AudioContext，收音的取樣率、增益時脈與關閉也各自處理。保留 AI 選擇、音訊歌詞對齊、YouTube 播放清單、雙向點歌同步、模糊比對及永久配對，沒有新增 Windows 套件需求。
+
+請儲存錄音並關閉程式，再執行 Update.exe，選擇原安裝資料夾。更新只覆蓋程式檔，保留 `library/`（含錄音）、`config.json`、用量紀錄、`song-request-links.json`、Python、套件和模型。**請勿執行完整移除工具來更新。**
+
+NSIS 3.11 建置；更新檔解封裝的 28 個檔案與 payload 完全相同，不含使用者資料或執行環境，更新腳本無刪除指令。SHA-256 見 [SHA256SUMS](./SHA256SUMS)。112 項 Python 測試：108 通過、4 跳過（3 項既有 AI 模式條件、1 項需要 PowerShell）；含本機小型 CTC 模型 CPU 推論。11 項 JavaScript 同步測試通過；AI 設定、強制對齊、直播歌詞及新增麥克風生命週期測試通過。實際 Flask 首頁、狀態、設定、歌曲庫及直播歌詞請求均成功。
+
+Windows 更新 GUI、實體 USB 麥克風、實際 GPU 分離及大型正式模型未在 Linux 雲端驗證；安裝檔未簽章。雙向同步已以既有回歸測試驗證，本次沒有啟動外部點歌系統或連線 Twitch。
+
+---
+
 # 整合版 1.4.7 — 合併原作者更新，保留完整點歌同步功能
 
 **此版本及後續更新只發佈到 `leihu-song-request-sync` 分支。**

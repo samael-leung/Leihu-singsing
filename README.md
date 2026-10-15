@@ -16,9 +16,9 @@
 
 ## Windows 安裝（windows-ai-choice）
 
-到 [installer/releases](installer/releases) 下載 `LeihuLiantai-windows-ai-choice-1.4.7-Setup.exe`。安裝到可寫入的資料夾，首次開啟後選擇 AI 模式。安裝程式先準備 Python、音訊套件及 UVR／Whisper；這一步不會下載 Ollama 或本機語言模型。已有安裝請關閉程式，安裝到原位置並選「更新」，保留歌曲、錄音與設定。
+到 [installer/releases](installer/releases) 下載 `LeihuLiantai-windows-ai-choice-1.4.8-Setup.exe`。安裝到可寫入的資料夾，首次開啟後選擇 AI 模式。安裝程式先準備 Python、音訊套件及 UVR／Whisper；這一步不會下載 Ollama 或本機語言模型。已有安裝請關閉程式，安裝到原位置並選「更新」，保留歌曲、錄音與設定。
 
-已安裝 Windows AI 選擇版 1.4.4／1.4.5／1.4.6／1.4.7 者，使用 `LeihuLiantai-windows-ai-choice-1.4.7-Update.exe` 即可加入雙向選歌；先儲存錄音、關閉程式，再選原安裝資料夾。這個程式更新檔不下載或重裝 Python、套件、模型，也不修改歌曲、錄音與設定。尚未完成安裝或更舊版本請使用完整 Setup.exe。
+已安裝 Windows AI 選擇版 1.4.4／1.4.5／1.4.6／1.4.7 者，使用 `LeihuLiantai-windows-ai-choice-1.4.8-Update.exe` 即可加入雙向選歌；先儲存錄音、關閉程式，再選原安裝資料夾。這個程式更新檔不下載或重裝 Python、套件、模型，也不修改歌曲、錄音與設定。尚未完成安裝或更舊版本請使用完整 Setup.exe。
 
 本機模式按「儲存」後才會沿用或安裝 Ollama、自動選模、下載並驗證回覆。下載中斷可再次儲存續傳。Ollama 官方 Windows 安裝檔會驗證 Authenticode 簽章，不會繞過驗證。API 模式不需要 Ollama，也不會下載本機語言模型。
 
@@ -128,3 +128,7 @@ Windows 安裝檔以 `sh installer/build.sh` 建置，需要 NSIS。Mac 請使�
 本版合併原作者 `LeihuTW/Leihu-singsing` 的 1.4.5（`18755f8`）：高品質主唱／合音分離、播放音量標準化、處理佇列的停止／取消，以及有時間上限的歌詞搜尋。保留本機／Claude／Gemini／OpenAI 選擇、音訊強制對齊、YouTube 播放清單批量匯入、點歌系統雙向同步、YouTube 歌名自動比對及記住對應。
 
 後續更新只發佈至本儲存庫的 `leihu-song-request-sync` 分支。已有 1.4.4～1.4.6 安裝可使用 1.4.7 Update.exe 更新程式，不用重新安裝執行環境；歌曲、API 設定與歌曲對應紀錄保留。上游的高品質分離模型首次使用可能需要下載約 900 MB；可在設定選「標準」沿用原本模型，自動模式只在顯示卡可用時使用高品質。
+
+## 整合版 1.4.8
+
+合併原作者 main 的 1.4.6（`ba4a84cbc1cce4e18b80547ae4f23cfc54387d6d`），將 USB 麥克風收音與音樂播放使用的 AudioContext 分開，改善不同裝置時脈造成的斷音與破音。保留 1.4.7 的全部整合功能。已有 1.4.7 請儲存錄音並關閉程式，再用 1.4.8 Update.exe 選原安裝資料夾；不重裝執行環境，不覆蓋使用者資料及永久配對紀錄。
