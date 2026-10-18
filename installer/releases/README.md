@@ -1,3 +1,23 @@
+# 整合版 1.4.10 — 合併原作者 1.4.9
+
+此版本只發佈到 `leihu-song-request-sync` 分支。
+
+- **已有 Windows AI 選擇版 1.4.4～1.4.9：[程式更新檔 Update.exe](./LeihuLiantai-windows-ai-choice-1.4.10-Update.exe)**
+- [首次安裝／修復用 Setup.exe](./LeihuLiantai-windows-ai-choice-1.4.10-Setup.exe)
+- [完整移除工具](./LeihuLiantai-windows-ai-choice-1.4.10-CleanUninstall.exe)
+
+合併原作者 `LeihuTW/Leihu-singsing` 的 1.4.9（`3b36bf2cd3ff611f6678a67d2bff4a454a3d377f`）：USB 麥克風修正、歌詞辨識品質與語言判斷、辨識／線上歌詞切換、高品質模型背景下載、Excel／CSV／歌名批次匯入、佇列排序、錄音對齊、試聽拖曳與匯出音質改善。
+
+保留本機／Claude／Gemini／OpenAI 選擇、音訊強制對齊、播放清單批量匯入與重試、雙向點歌同步、模糊歌名比對、一次確認及記住對應。不需要 ngrok 或新增同步軟體。重新辨識不會覆蓋手動修改、各 AI 供應商或音訊強制對齊的歌詞。
+
+請先儲存錄音並關閉程式，執行 Update.exe 選原安裝資料夾。不需要重新安裝 Python、套件或模型；歌曲庫、錄音、設定與 `song-request-links.json` 都會保留。高品質分離模型未下載完成時先使用標準模型並在背景下載；如要沿用現有模型，請在設定選「標準」。
+
+來源：`006a4790e52eb4c1a4bc3c67c979d2a4871df2cb`，NSIS 3.11 建置。103 項 Python 測試、11 項同步 JavaScript 測試及點歌系統 7 項測試通過；另有 3 項 Python 測試依 AI 模式跳過，真實 CTC 模型推論未執行。設定、直播歌詞及 USB 麥克風時脈 smoke 通過。實際 Flask／Node 配合 Chromium 驗證批次介面、模糊歌名選歌、保留點歌者、歌詞來源切換、反向選歌、跳歌及重新載入後的歌曲對應。Windows 安裝 GUI、實體 USB 麥克風與 GPU／模型推論仍需實機驗證。
+
+更新包的 21 個程式／設定來源檔已逐一比對一致，不包含 Python、歌曲庫、模型及使用者設定；Setup.exe 封裝檢查通過。SHA-256 見 [SHA256SUMS](./SHA256SUMS)。安裝檔未簽章。
+
+---
+
 # 整合版 1.4.7 — 合併原作者更新，保留完整點歌同步功能
 
 **此版本及後續更新只發佈到 `leihu-song-request-sync` 分支。**
