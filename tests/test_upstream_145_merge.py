@@ -56,10 +56,10 @@ class UpstreamMergeTests(unittest.TestCase):
 
     def test_quality_selection_and_saved_api_provider_coexist(self):
         cfg = dict(P.DEFAULT_CONFIG)
-        with patch.object(P, 'cuda_ok', return_value=False):
+        with patch.object(P, 'hq_ready', return_value=True), patch.object(P, 'cuda_ok', return_value=False):
             self.assertEqual(P.karaoke_model(cfg), cfg['karaoke_model'])
             self.assertEqual(P.karaoke_model(dict(cfg, karaoke_quality='high')), P.HQ_KARAOKE)
-        with patch.object(P, 'cuda_ok', return_value=True):
+        with patch.object(P, 'hq_ready', return_value=True), patch.object(P, 'cuda_ok', return_value=True):
             self.assertEqual(P.karaoke_model(cfg), P.HQ_KARAOKE)
             self.assertEqual(P.karaoke_model(dict(cfg, karaoke_quality='standard')), cfg['karaoke_model'])
         P.save_config(dict(cfg, ai_mode='api', api_provider='gemini', gemini_api_key='local-test-key',
@@ -91,7 +91,7 @@ class UpstreamMergeTests(unittest.TestCase):
                     sf.write(str(inner.folder / name), self.tone().T, P.SR)
                 return names
         fake = types.ModuleType('audio_separator.separator'); fake.Separator = Separator
-        with patch.dict(sys.modules, {'audio_separator': types.ModuleType('audio_separator'),
+        with patch.object(P, 'hq_ready', return_value=True), patch.dict(sys.modules, {'audio_separator': types.ModuleType('audio_separator'),
                                       'audio_separator.separator': fake}):
             P.separate_uvr(self.song, dict(P.DEFAULT_CONFIG, karaoke_quality='high'), lambda *args: None)
         self.assertIn(P.HQ_KARAOKE, loaded)

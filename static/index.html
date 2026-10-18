@@ -8,7 +8,7 @@
 </head>
 <body>
 <header class="bar">
-  <span class="logo">雷虎練唱台<small id="ver">1.4.7</small></span>
+  <span class="logo">雷虎練唱台<small id="ver">1.4.10</small></span>
   <nav class="row">
     <button id="nav-lib" class="tab cur">歌曲庫</button>
     <button id="nav-practice" class="tab" disabled>練唱</button>
@@ -38,6 +38,7 @@
       <label for="yt-url" class="yt-label">YouTube</label>
       <input id="yt-url" type="text" inputmode="url" autocomplete="off" placeholder="https://www.youtube.com/watch?v=…">
       <button id="yt-go" type="submit">下載並分析</button>
+      <button id="batch-open" type="button" class="ghost" title="一次加入多首：多個網址、歌單網址、歌手＋歌名，或 Excel 歌單">批次加入</button>
       <span id="yt-msg" class="hint"></span>
     </form>
     <details id="playlist-panel" class="playlist-panel">
@@ -147,6 +148,14 @@
         </div>
         <div id="faders" class="detail"></div>
         <label class="row hint" title="每首歌的音量差很多時，自動調到差不多大聲（不會改動原始檔）"><input id="norm-vol" type="checkbox" checked> 音量標準化 <span id="norm-db" class="num"></span></label>
+        <div id="mix-export" class="mix-export" hidden>
+          <div class="row">
+            <select id="mx-fmt" aria-label="匯出格式"><option value="mp3">MP3</option><option value="wav">WAV</option></select>
+            <button id="mx-go">匯出調整後的音訊</button>
+            <button id="mx-show" class="ghost" hidden>顯示檔案</button>
+          </div>
+          <span id="mx-msg" class="hint">依目前的 KEY、速度和主唱／合音／伴奏音量（含音量標準化）匯出；把主唱拉到 0 就是伴奏。不含導引音和你的錄音。</span>
+        </div>
         <p class="hint">「練唱」會把主唱調小、打開旋律導引音。移調和變速在本機算好後會存起來，下次切換不用再等。</p>
       </div>
 
@@ -186,11 +195,29 @@
 
       <div class="panel">
         <h2>歌詞</h2>
+        <div id="lyr-warn" class="cand warn-box" hidden>
+          <b>自動辨識的歌詞不夠準確，已先留白</b>
+          <span id="lyr-warn-why" class="hint"></span>
+          <div class="row"><button id="lyr-warn-search" class="primary">搜尋線上歌詞</button><button id="lyr-warn-import" class="ghost">匯入歌詞檔</button><button id="lyr-warn-show" class="ghost">仍然使用辨識結果</button></div>
+        </div>
+        <div id="lyr-src" class="row lyr-src">
+          <span class="hint">目前使用：<b id="lyr-src-name">—</b></span>
+          <button id="use-auto" class="ghost" hidden>改用辨識結果</button>
+          <button id="use-online" class="ghost" hidden>改用線上歌詞</button>
+        </div>
+        <div class="row lyr-src">
+          <label for="lyr-lang" class="hint">這首的辨識語言</label>
+          <select id="lyr-lang" aria-label="這首歌的辨識語言">
+            <option value="__cfg">依設定</option><option value="">自動判斷</option><option value="zh">中文</option>
+            <option value="ja">日文</option><option value="en">英文</option><option value="ko">韓文</option><option value="yue">粵語</option>
+          </select>
+          <button id="lyr-redo" class="ghost" title="用選的語言重新辨識；目前用的線上或匯入的歌詞不會被覆蓋">重新辨識歌詞</button>
+        </div>
         <div id="cand-box" class="cand" hidden>
           <b>找到線上歌詞，選一版使用</b>
-          <span class="hint">相似度是和自動辨識結果比對的程度，越高越可能是同一首歌、同一個版本。</span>
+          <span id="cand-hint" class="hint">相似度是和自動辨識結果比對的程度，越高越可能是同一首歌、同一個版本。</span>
           <div id="cand-list" class="ls-results"></div>
-          <div class="row"><button id="cand-keep" class="ghost">都不用，保留辨識結果</button></div>
+          <div class="row"><button id="cand-keep" class="ghost">都不用</button></div>
         </div>
         <div class="first-line">
           <div class="row">
@@ -208,7 +235,6 @@
         <div class="row">
           <button id="lrc-save">儲存歌詞</button>
           <button id="tap-start">跟拍打點</button>
-          <button id="lrc-auto" class="ghost">還原辨識結果</button>
           <button id="lrc-import" class="ghost" title="匯入 LRC、SRT 或 TXT 歌詞檔">匯入歌詞檔</button>
           <input id="lrc-file" type="file" accept=".lrc,.srt,.txt,text/plain" hidden>
         </div>
@@ -291,8 +317,17 @@
     </div>
     <div class="sh-player">
       <button id="sh-play" disabled>▶ 試聽</button>
-      <input id="sh-pos" type="range" min="0" max="1" step="0.1" value="0" aria-label="試聽位置" disabled>
+      <div class="sh-track">
+        <input id="sh-pos" type="range" min="0" max="1" step="0.05" value="0" aria-label="試聽位置" disabled>
+        <div class="sh-region" aria-hidden="true"><i id="sh-region"></i></div>
+      </div>
       <span id="sh-time" class="num hint">0:00</span>
+    </div>
+    <div class="row sh-jump">
+      <button class="ghost" id="sh-to-me" disabled title="跳到你開始唱的前 2 秒">⏮ 從我開始唱</button>
+      <button class="ghost" data-shj="-10" disabled>−10 秒</button><button class="ghost" data-shj="-5" disabled>−5 秒</button>
+      <button class="ghost" data-shj="5" disabled>+5 秒</button><button class="ghost" data-shj="10" disabled>+10 秒</button>
+      <span class="hint">拉桿下方的色帶是你有錄音的範圍，可以直接拖曳或點任何位置跳過去</span>
     </div>
     <span id="sh-pv-msg" class="hint">準備試聽中…</span>
     <div class="row">
@@ -323,6 +358,26 @@
       </div>
     </div>
     <div class="row" style="justify-content:flex-end"><button id="sh-close" class="ghost">關閉</button></div>
+  </div>
+</div>
+
+<div id="batch-dlg" class="modal" hidden>
+  <div class="sheet batch-sheet" role="dialog" aria-modal="true" aria-labelledby="batch-title">
+    <h1 id="batch-title">批次加入歌曲</h1>
+    <p class="hint">每行一首，可以混著輸入：YouTube 影片網址、歌單網址（會加入歌單裡的每一首），或「歌手 歌名」（會到 YouTube 搜尋第一筆結果）。也可以直接從 Excel 複製「歌手、曲名」兩欄貼上，或匯入 .xlsx／.csv 檔。</p>
+    <textarea id="batch-text" rows="7" placeholder="https://www.youtube.com/watch?v=…&#10;https://www.youtube.com/playlist?list=…&#10;周杰倫 晴天&#10;YOASOBI 夜に駆ける"></textarea>
+    <div class="row">
+      <button id="batch-resolve" class="primary">查詢</button>
+      <label class="btn ghost">匯入 Excel／CSV<input id="batch-file" type="file" accept=".xlsx,.csv,.txt,.tsv" hidden></label>
+      <span id="batch-msg" class="hint"></span>
+    </div>
+    <div id="batch-list" class="batch-list"></div>
+    <div class="row" id="batch-actions" hidden>
+      <label class="hint"><input id="batch-all" type="checkbox" checked> 全選</label>
+      <button id="batch-add" class="primary">加入下載佇列</button>
+      <span class="hint">依清單順序下載與處理，之後也可以在歌曲庫上方用 ▲▼ 調整順序。請只下載你有權使用的內容。</span>
+    </div>
+    <div class="row" style="justify-content:flex-end"><button id="batch-close" class="ghost">關閉</button></div>
   </div>
 </div>
 
@@ -398,7 +453,7 @@
       </select></label>
     <label class="field"><span>歌詞語言</span>
       <select id="cfg-lang">
-        <option value="zh">中文</option><option value="">自動判斷</option>
+        <option value="">自動判斷（建議）</option><option value="zh">中文</option>
         <option value="en">英文</option><option value="ja">日文</option><option value="ko">韓文</option>
       </select></label>
     <label class="row"><input id="cfg-tw" type="checkbox"> 中文歌詞轉成台灣繁體用字</label>
