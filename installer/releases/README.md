@@ -1,3 +1,23 @@
+# 整合版 1.5.2 — 合併原作者 1.5.1
+
+此版本只發佈到 `leihu-song-request-sync` 分支。
+
+- **已有 Windows AI 選擇版 1.4.4～1.5.1：[程式更新檔 Update.exe](./LeihuLiantai-windows-ai-choice-1.5.2-Update.exe)**
+- [首次安裝／修復用 Setup.exe](./LeihuLiantai-windows-ai-choice-1.5.2-Setup.exe)
+- [完整移除工具](./LeihuLiantai-windows-ai-choice-1.5.2-CleanUninstall.exe)
+
+合併原作者 `LeihuTW/Leihu-singsing` 的 1.5.1（`9b2014a8939cc0369ffb28d344b2b7f0744d9120`）：日文假名／羅馬拼音、逐首儲存讀音修正、舊日文歌詞字形修復、內建 jf open 粉圓字體與授權、分離進度及具有大小／SHA-256 驗證的多來源模型下載。
+
+保留本機／Claude／Gemini／OpenAI 選擇、音訊強制對齊、播放清單批量匯入與重試、雙向點歌同步、模糊歌名比對、一次確認及記住對應。保留重新辨識時不覆蓋手動修改或任何 AI／音訊對齊結果的行為，也保留直播歌詞切歌時重新傳送相同歌詞的修正；新增的日文標註會一起傳送。
+
+先儲存錄音並關閉程式，執行 Update.exe 選原安裝資料夾。更新包只覆蓋程式與內建字體，不重裝 Python 或模型；歌曲、錄音、設定及 `song-request-links.json` 保留。首次啟用日文標音時，程式會在背景自動下載約 45 MB 的 SudachiPy 字典套件；不需要重裝主程式、安裝系統字體或 ngrok。完整 Setup.exe 會預先安裝日文字典。
+
+來源：`f90bb3c4d8b66abd49b8ce2a43ba0e5ec62997a3`，NSIS 3.11 建置。109 項 Python、11 項同步 JavaScript 與點歌系統 7 項測試通過；另有 3 項 Python 測試依 AI 模式跳過，真實 CTC 模型推論未執行。設定／金鑰、直播歌詞（日文標註與切歌）及麥克風時脈 smoke 通過。實際 SudachiPy 字典與 Pillow 字體繪製通過；錯誤下載來源被檢查碼拒絕並切換備援來源的測試通過。
+
+Chromium 配合實際 Flask／Node 驗證模糊選歌、保留點歌者、反向選歌、重新載入歌曲對應、日文歌詞修復、假名／羅馬拼音、讀音修改及字體設定保存。更新包 24 個程式／字體／授權檔與來源逐一比對一致，不包含 Python、歌曲、模型或使用者設定；封裝及 SHA-256 見 [SHA256SUMS](./SHA256SUMS)。Windows 安裝 GUI、實體麥克風、實際 GPU／模型推論未在雲端驗證，安裝檔未簽章。
+
+---
+
 # 整合版 1.4.10 — 合併原作者 1.4.9
 
 此版本只發佈到 `leihu-song-request-sync` 分支。
