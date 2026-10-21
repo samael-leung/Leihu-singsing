@@ -8,7 +8,7 @@
 </head>
 <body>
 <header class="bar">
-  <span class="logo">雷虎練唱台<small id="ver">1.4.10</small></span>
+  <span class="logo">雷虎練唱台<small id="ver">1.5.2</small></span>
   <nav class="row">
     <button id="nav-lib" class="tab cur">歌曲庫</button>
     <button id="nav-practice" class="tab" disabled>練唱</button>
@@ -129,6 +129,7 @@
           <button id="lyr-show" title="在旋律上方逐字顯示歌詞">字在旋律上</button>
           <button id="lyr-edit" title="拖曳調整每句、每個字的時間">調整</button>
           <button id="lyr-color" title="唱到哪個字就把哪個字上色；歌詞時間沒對準時可以關掉">逐字上色</button>
+          <select id="lyr-kana" title="日文歌詞的讀音標註；平假名模式下讀音不對可以點一下修改" hidden><option value="hira">假名標音</option><option value="romaji">羅馬拼音</option><option value="off">不標讀音</option></select>
           <label for="lyr-size" title="旋律上歌詞的字級">字級</label>
           <input id="lyr-size" type="range" min="12" max="40" step="1" value="18" style="width:80px">
           <button id="ov-open" title="給 OBS 等直播軟體用的去背歌詞畫面">直播歌詞</button>
@@ -395,7 +396,7 @@
       <label for="ov-align">對齊</label>
       <select id="ov-align"><option value="center" selected>置中</option><option value="left">靠左</option></select>
       <label for="ov-font">字體</label>
-      <select id="ov-font"><option value="kai" selected>楷書（和練唱畫面相同）</option><option value="sans">黑體（微軟正黑體）</option></select>
+      <select id="ov-font"><option value="huninn" selected>粉圓（內建）</option><option value="kai">楷書</option><option value="sans">黑體（微軟正黑體）</option></select>
       <label for="ov-color">上色</label>
       <span class="row"><input id="ov-color" type="color" value="#f0a04a"><span class="hint">字的顏色是白色，唱到的字換成這個顏色</span></span>
       <label for="ov-bg">背景</label>
@@ -457,6 +458,8 @@
         <option value="en">英文</option><option value="ja">日文</option><option value="ko">韓文</option>
       </select></label>
     <label class="row"><input id="cfg-tw" type="checkbox"> 中文歌詞轉成台灣繁體用字</label>
+    <label class="field"><span>字體（練唱畫面、歌詞與匯出的影片／成績卡）</span>
+      <select id="cfg-font"><option value="huninn">粉圓（內建 jf open 粉圓）</option><option value="kai">楷書（歌詞楷書、介面黑體）</option><option value="sans">黑體（微軟正黑體）</option></select></label>
     <label class="field"><span>人聲分離模型</span><input id="cfg-sep" type="text"></label>
     <label class="field"><span>主唱／合音分離品質（合音多的歌，高品質的旋律會準很多）</span>
       <select id="cfg-kq"><option value="auto">自動（有顯示卡用高品質）</option><option value="high">高品質（沒有顯示卡會非常慢）</option><option value="standard">標準（快）</option></select></label>

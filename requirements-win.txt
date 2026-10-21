@@ -23,3 +23,5 @@ pillow==11.3.0
 
 # Wav2Vec2/CTC audio forced alignment
 transformers>=4.46,<5
+sudachipy==0.7.0
+sudachidict_small==20261015

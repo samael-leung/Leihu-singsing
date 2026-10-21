@@ -91,7 +91,7 @@ class UpstreamMergeTests(unittest.TestCase):
                     sf.write(str(inner.folder / name), self.tone().T, P.SR)
                 return names
         fake = types.ModuleType('audio_separator.separator'); fake.Separator = Separator
-        with patch.object(P, 'hq_ready', return_value=True), patch.dict(sys.modules, {'audio_separator': types.ModuleType('audio_separator'),
+        with patch.object(P, 'ensure_model'), patch.object(P, 'hq_ready', return_value=True), patch.dict(sys.modules, {'audio_separator': types.ModuleType('audio_separator'),
                                       'audio_separator.separator': fake}):
             P.separate_uvr(self.song, dict(P.DEFAULT_CONFIG, karaoke_quality='high'), lambda *args: None)
         self.assertIn(P.HQ_KARAOKE, loaded)

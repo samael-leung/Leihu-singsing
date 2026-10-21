@@ -12,7 +12,7 @@ const cfg = {ai_mode:'local',api_provider:'openai',ai_setup_complete:false,ollam
   claude_model:'claude-sonnet-4-6',gemini_model:'gemini-2.5-flash',has_keys:{openai:true,claude:false,gemini:false},
   whisper_model:'large-v3-turbo',lyrics_language:'zh',convert_to_taiwan:true,
   separation_model:'UVR-MDX-NET-Inst_HQ_3.onnx',karaoke_model:'UVR_MDXNET_KARA_2.onnx',pitch_model:'auto'};
-let saved, prepared=0;
+let saved, appliedFont, prepared=0;
 const context = vm.createContext({
   $: selector => {const element=elements[selector.slice(1)];assert.ok(element,selector);return element;},
   api: async (path,opts) => {
@@ -22,7 +22,7 @@ const context = vm.createContext({
     if(path==='/api/ai/hardware') return {model:'qwen2.5:14b',num_ctx:16384,reason:'RTX 24 GB'};
     if(path==='/api/ai/prepare') {assert.equal(cfg.ai_mode,'local');prepared++;return {job:'setup',model:cfg.ollama_model};}
     throw new Error(path);
-  },renderUsage:async()=>{},pollJobs(){},toast(){},waitJob:async(id,step)=>{step({step:'done',progress:1});},
+  },applyFont(font){appliedFont=font;},renderUsage:async()=>{},pollJobs(){},toast(){},waitJob:async(id,step)=>{step({step:'done',progress:1});},
 });
 const start=js.indexOf('let settingsKeys =');
 const end=js.indexOf('/* ------------------------------------------------------------ 啟動 */',start);
@@ -39,7 +39,9 @@ vm.runInContext(js.slice(start,end),context);
     assert.equal(elements['cfg-api'].hidden,false);
     for(const other of ['openai','claude','gemini']) assert.equal(elements['cfg-'+other].hidden,other!==provider);
     elements['cfg-'+provider+'-key'].value='private-'+provider;
+    elements['cfg-font'].value='sans';
     await context.saveSettings();
+    assert.equal(saved.font,'sans');assert.equal(appliedFont,'sans');
     assert.equal(saved.api_provider,provider);assert.equal(saved.ai_mode,'api');
     assert.equal(saved[provider==='claude'?'anthropic_api_key':provider+'_api_key'],'private-'+provider);
     assert.equal(elements['cfg-'+provider+'-key'].value,'');

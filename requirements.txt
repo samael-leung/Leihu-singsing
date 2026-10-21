@@ -15,3 +15,5 @@ imageio-ffmpeg
 
 # Wav2Vec2/CTC audio forced alignment
 transformers>=4.46,<5
+sudachipy
+sudachidict_small
