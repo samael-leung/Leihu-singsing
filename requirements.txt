@@ -17,3 +17,7 @@ imageio-ffmpeg
 transformers>=4.46,<5
 sudachipy
 sudachidict_small
+
+# Security: patched CA bundle and image/font decoders
+certifi>=2026.10.19
+pillow>=13.0.0

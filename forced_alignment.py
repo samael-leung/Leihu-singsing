@@ -138,12 +138,12 @@ def run(d, text, language, original_revision, report):
     """Native/model work is isolated; commit only a complete, current result."""
     if language not in MODELS:
         raise P.UserError('強制對齊目前支援中文普通話與英文。')
-    if not (d / 'lead.wav').is_file():
+    if not P.stem_path(d, 'lead').is_file():
         raise P.UserError('請先完成分軌，強制對齊需要主唱音訊。')
     (P.ROOT / 'logs').mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='alignment-', dir=d) as temporary:
         result_file = Path(temporary) / 'result.json'
-        payload = {'audio': str((d / 'lead.wav').resolve()), 'text': text, 'language': language, 'model': MODELS[language],
+        payload = {'audio': str(P.stem_path(d, 'lead').resolve()), 'text': text, 'language': language, 'model': MODELS[language],
                    'cache': str((P.MODELS / 'alignment').resolve()), 'result': str(result_file.resolve()),
                    'parent_pid': os.getpid()}
         process = subprocess.Popen([sys.executable, '-u', str(P.ROOT / 'alignment_worker.py')],

@@ -23,7 +23,7 @@ import pipeline as P
 import share as SH
 import song_request
 
-VERSION = "1.5.2"
+VERSION = "1.6.2"
 HOST, PORT = "127.0.0.1", int(os.environ.get("LIANTAI_PORT", "8765"))
 app = Flask(__name__, static_folder=str(P.ROOT / "static"), static_url_path="/static")
 app.config["MAX_CONTENT_LENGTH"] = 1024 * 1024 * 1024
@@ -54,7 +54,47 @@ def status():
                    hq_model=P.HQ_KARAOKE,
                    ai_ready=C.ready(), ai_provider=C.provider(),
                    session_cost=C.summary()["session"]["cost_usd"],
-                   jobs=jobs.active() + vjobs.active())
+                   jobs=jobs.active() + vjobs.active(), remote=dict(REMOTE), yt_pause=dict(P.YT_PAUSE))
+
+
+@app.post("/api/youtube/resume")
+def youtube_resume():
+    """YouTube 限制解除後，繼續下載所有被暫停的歌。"""
+    P.YT_PAUSE.update(on=False, reason="")
+    n = 0
+    for m in sorted(P.pending_downloads(), key=lambda m: m.get("created") or 0):
+        if m["dl_state"] == "paused" and not _downloading(m["id"]):
+            P.set_dl_state(P.song_dir(m["id"]), "queued")
+            P.update_meta(P.song_dir(m["id"]), notes=[])
+            yt_submit(m["id"], m["source_url"])
+            n += 1
+    return jsonify(resumed=n)
+
+
+# 遠端開歌：本機的其他程式（例如點歌系統）請練唱畫面打開某首歌並切到指定 KEY。
+# 練唱畫面輪詢 /api/status 時看到 seq 變了就照做。
+REMOTE = {"seq": 0, "id": None, "key": 0}
+_remote_lock = threading.Lock()
+
+
+@app.post("/api/remote/open")
+def remote_open():
+    # 只給本機程式呼叫：瀏覽器裡的網頁送出的請求一定帶 Origin，一律拒絕，
+    # 避免任何網站趁你開著練唱台時切換歌曲
+    if request.headers.get("Origin"):
+        abort(403)
+    body = request.get_json(force=True) or {}
+    sid = body.get("id") or ""
+    P.song_dir(sid)
+    try:
+        key = int(body.get("key", 0))
+    except (TypeError, ValueError):
+        raise P.UserError("KEY 格式不正確")
+    if not -6 <= key <= 6:
+        raise P.UserError("KEY 範圍是 ±6")
+    with _remote_lock:
+        REMOTE.update(seq=REMOTE["seq"] + 1, id=sid, key=key)
+        return jsonify(seq=REMOTE["seq"])
 
 
 @app.get("/api/config")
@@ -148,6 +188,12 @@ def songs():
     return jsonify(P.list_songs())
 
 
+@app.get("/api/songs/search")
+def songs_search():
+    """歌曲庫搜尋：繁體、簡體互相找得到，另外列出歌名相近的歌。"""
+    return jsonify(P.search_songs(request.args.get("q", "")[:200]))
+
+
 @app.post("/api/songs")
 def add_song():
     f = request.files.get("file")
@@ -163,22 +209,34 @@ def add_song():
     if cat in P.load_categories():
         P.update_meta(P.song_dir(sid), category=cat)
     steps = ["import", "separate", "pitch", "lyrics"]
-    jid = jobs.submit("process", sid, P.process_song(sid, steps), label="all")
+    proc = P.process_song(sid, steps)
+
+    def run(report, sid=sid):
+        proc(report)
+        after_process(sid)
+    jid = jobs.submit("process", sid, run, label="all")
     return jsonify(id=sid, job=jid)
 
 
 @app.post("/api/youtube")
 def add_youtube():
     url = P.clean_youtube_url((request.get_json(force=True) or {}).get("url", ""))
-    active = {job["song"] for job in jobs.active() if job["status"] in ("queued", "running")}
     for m in P.list_songs():
-        if m.get("source_url") == url and (m.get("steps", {}).get("import") or m["id"] in active):
+        if m.get("source_url") != url:
+            continue
+        if m.get("steps", {}).get("import"):
             raise P.UserError(f"這首歌已經在歌曲庫裡：{m.get('title')}")
+        if _downloading(m["id"]) or m.get("dl_state") == "queued":
+            raise P.UserError(f"這首歌已經在下載佇列裡：{m.get('title')}")
+        # 之前下載失敗或取消的同一首：直接用原本那一項重新下載，不另外多一項
+        P.set_dl_state(P.song_dir(m["id"]), "queued")
+        jid = yt_submit(m["id"], url)
+        return jsonify(id=m["id"], job=jid, retried=True)
     sid = P.new_youtube_song(url)
     cat = (request.get_json(force=True) or {}).get("category") or None
     if cat in P.load_categories():
         P.update_meta(P.song_dir(sid), category=cat)
-    jid = jobs.submit("process", sid, P.youtube_job(sid, url), label="youtube")
+    jid = yt_submit(sid, url)
     return jsonify(id=sid, job=jid)
 
 
@@ -194,7 +252,7 @@ def playlist_import():
     category = body.get('category') or None
     if category not in P.load_categories():
         category = None
-    return jsonify(YP.create(body.get('items'), category, jobs))
+    return jsonify(YP.create(body.get('items'), category, jobs, after=after_process))
 
 
 @app.get('/api/youtube/playlist/batches/<bid>')
@@ -214,15 +272,108 @@ def playlist_stop(bid):
 
 @app.post('/api/youtube/playlist/batches/<bid>/retry')
 def playlist_retry(bid):
-    return jsonify(YP.retry(bid, jobs))
+    return jsonify(YP.retry(bid, jobs, after=after_process))
+
+
+def prerender_key(sid: str) -> str | None:
+    """這首歌有預設 KEY（例如表單的 -4）時，先把那個 KEY 的移調版本做好，打開就能直接唱。"""
+    d = P.song_dir(sid)
+    meta = P.read_meta(d)
+    key = meta.get("key") or 0
+    if not key or not meta.get("steps", {}).get("separate") or P.variant_ready(d, key, 1.0):
+        return None
+    label = f"{key}:1.0"
+    return vjobs.find("variant", sid, label) or vjobs.submit(
+        "variant", sid, lambda report: P.step_variant(d, key, 1.0, report), label=label)
+
+
+def after_process(sid: str) -> None:
+    """一首歌處理完：先做好預設 KEY 的移調版本；合音多的歌，依設定自動排一次精細處理（排在佇列最後）。"""
+    meta = P.read_meta(P.song_dir(sid))
+    if meta.get("fine_suggest") and not meta.get("fine_done") and P.load_config().get("auto_fine", True):
+        queue_fine(sid)   # 精細處理完才做移調版本（重新分軌會清掉舊的移調版本）
+    else:
+        prerender_key(sid)
+
+
+def queue_fine(sid: str) -> str:
+    jid = jobs.find("process", sid, "fine")
+    if jid:
+        return jid
+    P.update_meta(P.song_dir(sid), fine_queued=True)
+    return jobs.submit("process", sid, P.fine_job(sid, after=prerender_key), label="fine")
+
+
+def yt_submit(sid: str, url: str) -> str:
+    return jobs.submit("process", sid, P.youtube_job(sid, url, after=after_process), label="youtube")
+
+
+def prefetcher() -> None:
+    """背景預先下載：佇列裡接下來的兩首 YouTube 歌，趁顯示卡在處理別首時先下載好。"""
+    while True:
+        time.sleep(3)
+        try:
+            if P.YT_PAUSE["on"]:
+                continue
+            for sid in jobs.upcoming("youtube", 2):
+                P.prefetch_youtube(sid)
+        except Exception as e:
+            P.log_error("prefetcher", e)
+
+
+def apply_sheet(sid: str, info: dict, batch_cat: str | None = None) -> None:
+    """把表單的歌手、曲名、KEY、語言（＋分類）寫進歌曲資料。曲名有填就鎖住，下載完不會被 YouTube 標題蓋掉。"""
+    d = P.song_dir(sid)
+    meta = P.read_meta(d)
+    ch: dict = {}
+    if info.get("song"):
+        ch.update(title=str(info["song"])[:120], title_locked=True)
+    if info.get("artist"):
+        ch["artist"] = str(info["artist"])[:80]
+    if info.get("key") is not None:
+        k = P.parse_key(info["key"])
+        if k is not None and k != (meta.get("key") or 0):
+            ch.update(key=k, key_set_at=time.time())
+    if info.get("lang") in ("zh", "ja", "en", "ko", "yue"):
+        ch["lyrics_language"] = info["lang"]
+    cat = batch_cat or (info.get("category") if not meta.get("category") else None)
+    if cat:
+        cats = P.load_categories()
+        if cat not in cats:
+            P.save_categories(cats + [cat])
+        ch["category"] = cat
+    if ch:
+        P.update_meta(d, **ch)
+        if meta.get("dl_state"):   # 還沒下載完：歌名後面繼續標（排隊下載）等狀態
+            P.set_dl_state(d, meta["dl_state"])
+
+
+def _downloading(sid: str) -> bool:
+    return any(j.get("song") == sid and j.get("status") in ("queued", "running") for j in jobs.active())
+
+
+@app.post("/api/sheet-template")
+def sheet_template():
+    """批次加入的「下載範本」：把建議格式的歌單 .csv 存到「下載\雷虎練唱台」並在檔案總管裡顯示
+    （視窗程式裡的網頁不能直接下載檔案）。Excel 開啟不會亂碼。"""
+    out = P.downloads_dir() / P.APP_NAME / "歌單範本.csv"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(P.ROOT / "static" / "song-list-template.csv", out)
+    if sys.platform == "win32":
+        import subprocess
+        subprocess.Popen(["explorer", "/select,", str(out)])
+    return jsonify(path=str(out))
 
 
 @app.post("/api/youtube/resolve")
 def youtube_resolve():
     """批次匯入：把多行輸入（影片網址、歌單網址、歌手＋歌名）解析成影片清單，讓使用者確認。"""
-    lines = (request.get_json(force=True) or {}).get("lines") or []
+    body = request.get_json(force=True) or {}
+    lines = body.get("lines") or []
     if not isinstance(lines, list):
         raise P.UserError("格式不正確")
+    if isinstance(body.get("sheet"), list):   # 匯入的表單：每一列直接對應，不經過文字框
+        return jsonify(items=P.resolve_lines([], body["sheet"]))
     return jsonify(items=P.resolve_lines([str(x) for x in lines]))
 
 
@@ -233,9 +384,22 @@ def youtube_batch():
     cat = body.get("category") or None
     if cat not in P.load_categories():
         cat = None
-    existing = {m.get("source_url") for m in P.list_songs() if m.get("steps", {}).get("import")}
+    songs = [m for m in P.list_songs() if m.get("source_url")]
+    existing = {m["source_url"] for m in songs
+                if m.get("steps", {}).get("import") or m.get("dl_state") == "queued" or _downloading(m["id"])}
+    retry = {m["source_url"]: m["id"] for m in songs if m["source_url"] not in existing}   # 失敗／取消過的
     added, skipped = [], 0
+    updated = 0
     for it in (body.get("items") or [])[:P.BATCH_MAX]:
+        sheet = it.get("sheet") if isinstance(it.get("sheet"), dict) else None
+        if it.get("update") and sheet:   # 歌曲庫已經有的歌：只更新資訊，不重新下載
+            try:
+                apply_sheet(str(it["update"]), sheet, cat)
+                prerender_key(str(it["update"]))
+                updated += 1
+            except Exception as e:
+                P.log_error("batch update", e)
+            continue
         try:
             url = P.clean_youtube_url(it.get("url", ""))
         except P.UserError:
@@ -245,12 +409,22 @@ def youtube_batch():
             skipped += 1
             continue
         existing.add(url)
-        sid = P.new_youtube_song(url, str(it.get("title") or "")[:100])
-        if cat:
+        if url in retry:   # 之前下載失敗或取消的同一首：用原本那一項重新下載
+            sid = retry[url]
+            if sheet:
+                apply_sheet(sid, sheet, cat)
+            P.set_dl_state(P.song_dir(sid), "queued")
+            yt_submit(sid, url)
+            added.append(sid)
+            continue
+        sid = P.new_youtube_song(url, str((sheet or {}).get("song") or it.get("title") or "")[:100])
+        if sheet:
+            apply_sheet(sid, sheet, cat)
+        elif cat:
             P.update_meta(P.song_dir(sid), category=cat)
-        jobs.submit("process", sid, P.youtube_job(sid, url), label="youtube")
+        yt_submit(sid, url)
         added.append(sid)
-    return jsonify(added=len(added), skipped=skipped)
+    return jsonify(added=len(added), skipped=skipped, updated=updated)
 
 
 @app.post("/api/youtube/sheet")
@@ -261,7 +435,8 @@ def youtube_sheet():
     data = f.read()
     if len(data) > 10_000_000:
         raise P.UserError("檔案太大")
-    return jsonify(lines=P.read_sheet(data, f.filename or ""))
+    rows = P.read_sheet(data, f.filename or "")
+    return jsonify(lines=[r["line"] for r in rows if r.get("line")], rows=rows)
 
 
 @app.post("/api/songs/<sid>/mixdown")
@@ -293,7 +468,7 @@ def mixdown(sid):
         for k, g in gains.items():
             if g <= 0:
                 continue
-            y, sr = sf.read(str(vd / f"{k}.wav"), dtype="float32", always_2d=True)
+            y, sr = sf.read(str(P.stem_path(vd, k)), dtype="float32", always_2d=True)
             y = y.T if y.shape[1] == 2 else np.repeat(y.T, 2, 0)
             parts.append(y * g)
         n = min(p.shape[1] for p in parts)
@@ -319,7 +494,7 @@ def job_move(jid):
 def song(sid):
     d = P.song_dir(sid)
     meta = P.read_meta(d)
-    if "acapella" not in meta and (d / "inst.wav").exists() and (d / "lead.wav").exists():
+    if "acapella" not in meta and P.stem_path(d, "inst").exists() and P.stem_path(d, "lead").exists():
         meta = P.update_meta(d, acapella=P.is_acapella(d))   # 舊歌曲補上清唱判斷
     if meta.get("lufs") is None and meta.get("steps", {}).get("import"):
         meta = P.measure_loudness(d)   # 舊歌曲第一次開啟時補量響度（約 1 秒）
@@ -343,10 +518,20 @@ def rename(sid):
         if cat and cat not in P.load_categories():
             raise P.UserError("找不到這個分類")
         changes["category"] = cat
+    if "artist" in body:
+        changes["artist"] = (body.get("artist") or "").strip()[:80]
+    if "title" in body:
+        changes["title_locked"] = True
+    if "key" in body:   # 預設 KEY：打開這首歌時自動切到這個 KEY，並先做好移調版本
+        k = P.parse_key(body.get("key"))
+        changes.update(key=k or 0, key_set_at=time.time())
     if "lyrics_language" in body:   # 這首歌的辨識語言；null＝依設定
         v = body.get("lyrics_language")
         changes["lyrics_language"] = v if v in ("", "zh", "ja", "en", "ko", "yue") else None
-    return jsonify(P.update_meta(d, **changes))
+    meta = P.update_meta(d, **changes)
+    if "key" in changes:
+        prerender_key(sid)
+    return jsonify(meta)
 
 
 @app.delete("/api/songs/<sid>")
@@ -495,6 +680,29 @@ def variant(sid):
     return jsonify(ready=False, job=jid)
 
 
+@app.post("/api/songs/<sid>/fine")
+def song_fine(sid):
+    """手動排一次精細處理（最精細的主唱分離＋重新分析旋律）。"""
+    P.song_dir(sid)
+    return jsonify(job=queue_fine(sid))
+
+
+@app.get("/api/storage")
+def storage():
+    return jsonify(P.storage_report())
+
+
+@app.post("/api/storage/compact")
+def storage_compact():
+    """把舊歌曲的 WAV 分軌轉成 FLAC（無損）、刪掉不需要的原始檔。排進處理佇列，和處理歌曲不會同時進行。"""
+    j = jobs.find("process", "", "compact")
+    if j:
+        return jsonify(job=j)
+    busy = lambda sid: any(x.get("song") == sid and x.get("status") in ("queued", "running") for x in vjobs.active())
+    jid = jobs.submit("process", "", lambda report: P.compact_library(report, busy), label="compact")
+    return jsonify(job=jid)
+
+
 @app.get("/api/songs/<sid>/audio/<stem>")
 def audio(sid, stem):
     d = P.song_dir(sid)
@@ -502,10 +710,10 @@ def audio(sid, stem):
         abort(404)
     key, speed = _key_speed()
     base = d if stem == "mix" else P.variant_dir(d, key, speed)
-    p = base / f"{stem}.wav"
+    p = P.stem_path(base, stem)
     if not p.exists():
         abort(404)
-    return send_file(p, mimetype="audio/wav", conditional=True, max_age=0)
+    return send_file(p, mimetype="audio/flac" if p.suffix == ".flac" else "audio/wav", conditional=True, max_age=0)
 
 
 @app.get("/api/debug/stacks")
@@ -525,7 +733,41 @@ def job_cancel(jid):
     q = jobs if jobs.get(jid) else vjobs
     if not q.cancel(jid):
         raise P.UserError("這個工作已經結束了")
+    j = q.get(jid) or {}
+    if j.get("label") == "youtube":   # 還在排隊的 YouTube 下載被取消：歌名標成「已取消下載」，之後可以重新下載
+        try:
+            d = P.song_dir(j["song"])
+            if not P.read_meta(d).get("steps", {}).get("import"):
+                P.set_dl_state(d, "cancelled")
+        except Exception:
+            pass
     return jsonify(ok=True)
+
+
+@app.post("/api/songs/<sid>/redownload")
+def redownload(sid):
+    """下載失敗或取消的 YouTube 歌曲，重新排隊下載。"""
+    d = P.song_dir(sid)
+    meta = P.read_meta(d)
+    url = meta.get("source_url")
+    if not url or meta.get("steps", {}).get("import"):
+        raise P.UserError("這首歌不需要重新下載")
+    P.YT_PAUSE.update(on=False, reason="")   # 使用者手動重試：解除暫停
+    if any(j.get("song") == sid and j.get("status") in ("queued", "running") for j in jobs.active()):
+        raise P.UserError("這首歌已經在下載佇列裡")
+    P.set_dl_state(d, "queued")
+    jid = yt_submit(sid, url)
+    return jsonify(job=jid)
+
+
+def resume_downloads() -> None:
+    """程式關掉時還在排隊的 YouTube 下載，重新開啟後自動接著排隊（失敗、取消的不會自動重試）。"""
+    try:
+        for m in sorted(P.pending_downloads(), key=lambda m: m.get("created") or 0):
+            if m["dl_state"] == "queued":
+                yt_submit(m["id"], m["source_url"])
+    except Exception as e:
+        P.log_error("resume_downloads", e)
 
 
 @app.get("/api/jobs/<jid>")
@@ -637,7 +879,7 @@ def take_mixprep(sid, tid):
     opts = _share_opts()
     info = SH.load_take(d, tid)
     key, speed = SH.variant_needed(d, info)
-    back = P.variant_dir(d, key, speed) / "back.wav"
+    back = P.stem_path(P.variant_dir(d, key, speed), "back")
     sr, n = sf_info(back)
     tag = f"v2_{int(opts['polish'])}_{opts['reverb']}"   # v2：上游 1.4.9 改了人聲處理，舊的暫存要重做
     vp = d / "takes" / f"{tid}.vocal_{tag}.wav"
@@ -764,7 +1006,7 @@ def force_align(sid):
         raise P.UserError('請貼上完整正確歌詞（最多 12,000 字元）。')
     if language not in FA.MODELS:
         raise P.UserError('強制對齊目前支援中文普通話與英文。')
-    if not (d / 'lead.wav').is_file():
+    if not P.stem_path(d, 'lead').is_file():
         raise P.UserError('請先完成歌曲分軌。')
     revision = FA.revision(d)
     label = 'force-align:' + language + ':' + FA.hashlib.sha256((text + revision).encode()).hexdigest()
@@ -1131,6 +1373,8 @@ def main():
         except (RuntimeError, OSError, ValueError) as error:
             print(f"  本機 AI 暫時無法使用：{error}")
     watch_parent()
+    resume_downloads()
+    threading.Thread(target=prefetcher, daemon=True, name="prefetch").start()
     url = f"http://{HOST}:{PORT}"
     print(f"\n  {P.APP_NAME} {VERSION} 已啟動：{url}\n  關閉這個視窗就會結束程式。\n")
     if "--no-browser" not in sys.argv:

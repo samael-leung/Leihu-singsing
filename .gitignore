@@ -16,6 +16,7 @@ __pycache__/
 *.pyc
 .venv/
 python/
+secure-runtime/
 # 安裝檔建置
 installer/payload/
 installer/out/

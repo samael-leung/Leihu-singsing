@@ -73,13 +73,15 @@ class Upstream149Tests(unittest.TestCase):
     def test_csv_batch_upload_and_deduplication_coexist_with_playlist_routes(self):
         data = '歌手,曲名\n郭靜,下一個天亮\n'.encode('utf-8-sig')
         response = self.client.post('/api/youtube/sheet', data={'file': (io.BytesIO(data), 'songs.csv')})
-        self.assertEqual(response.json, {'lines': ['郭靜 下一個天亮']})
+        self.assertEqual(response.json['lines'], ['郭靜 下一個天亮'])
+        self.assertEqual(response.json['rows'][0]['artist'], '郭靜')
+        self.assertEqual(response.json['rows'][0]['song'], '下一個天亮')
         from test_youtube_playlist import Jobs
         jobs = Jobs()
         video = {'url': 'https://youtu.be/abcdefghijk', 'title': 'Next dawn'}
         with patch.object(web, 'jobs', jobs):
             response = self.client.post('/api/youtube/batch', json={'items': [video, video]})
-        self.assertEqual(response.json, {'added': 1, 'skipped': 1})
+        self.assertEqual(response.json, {'added': 1, 'skipped': 1, 'updated': 0})
         self.assertEqual(len(jobs.workers), 1)
         self.assertEqual(len(P.list_songs()), 2)
         self.assertEqual(self.client.get('/api/youtube/playlist/batches').status_code, 200)

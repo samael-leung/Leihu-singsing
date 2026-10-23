@@ -131,6 +131,16 @@ Path(data['result']).write_text(json.dumps({'lines':[{'t':.1,'end':.5,'text':'�
         self.assertIn('<00:00.10>新<00:00.20>歌', (self.song / 'lyrics.lrc').read_text())
         self.assertEqual(P.read_meta(self.song)['lyrics_source'], 'forced_alignment')
 
+    def test_flac_only_library_uses_new_stem_for_endpoint_and_worker(self):
+        self.result_worker()
+        sf.write(self.song / 'lead.flac', np.zeros(16000), 16000)
+        (self.song / 'lead.wav').unlink()
+        with patch.object(web.jobs, 'find', return_value=None), patch.object(web.jobs, 'submit', return_value='flac-job'):
+            response = self.client.post('/api/songs/abcdef/lyrics/force-align', json={'text': '新歌詞', 'language': 'zh'})
+        self.assertEqual(response.status_code, 200)
+        F.run(self.song, '新歌詞', 'zh', F.revision(self.song), lambda *args: None)
+        self.assertIn('<00:00.10>新', (self.song / 'lyrics.lrc').read_text())
+
     def test_worker_failure_preserves_existing_lyrics(self):
         before = (self.song / 'lyrics.lrc').read_bytes()
         self.worker('import sys\nsys.stdin.readline()\nsys.exit(139)\n')

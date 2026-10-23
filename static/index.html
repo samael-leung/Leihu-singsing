@@ -8,7 +8,7 @@
 </head>
 <body>
 <header class="bar">
-  <span class="logo">雷虎練唱台<small id="ver">1.5.2</small></span>
+  <span class="logo">雷虎練唱台<small id="ver">1.6.2</small></span>
   <nav class="row">
     <button id="nav-lib" class="tab cur">歌曲庫</button>
     <button id="nav-practice" class="tab" disabled>練唱</button>
@@ -64,12 +64,21 @@
     <div id="jobs" class="jobs"></div>
     <div class="lib-tools">
       <nav id="cats" class="cats" aria-label="分類"></nav>
-      <input id="lib-q" type="search" placeholder="搜尋歌名、歌手、歌詞" aria-label="搜尋歌曲">
+      <span class="lib-right">
+        <select id="lib-sort" aria-label="排序"><option value="new">最新加入</option><option value="title">依曲名</option><option value="artist">依歌手</option></select>
+        <input id="lib-q" type="search" placeholder="搜尋曲名、歌手、歌詞" aria-label="搜尋歌曲">
+      </span>
     </div>
     <div id="cat-tools" class="row cat-tools" hidden>
       <span class="hint" id="cat-hint"></span>
       <button id="cat-rename" class="ghost">改名</button>
       <button id="cat-del" class="ghost danger">刪除分類</button>
+    </div>
+    <div id="yt-pause" class="yt-pause" role="alert" hidden>
+      <div><b>YouTube 暫時限制了下載，已自動暫停後面的下載。</b>
+        <span class="hint">短時間內下載太多次時 YouTube 會暫時擋住這個網路，通常幾小時到一天會恢復。請先不要再下載，也不要開 VPN 重試。</span>
+        <span id="yt-pause-n" class="hint"></span></div>
+      <button id="yt-resume">繼續下載</button>
     </div>
     <div id="songs" class="songs"></div>
   </section>
@@ -365,11 +374,12 @@
 <div id="batch-dlg" class="modal" hidden>
   <div class="sheet batch-sheet" role="dialog" aria-modal="true" aria-labelledby="batch-title">
     <h1 id="batch-title">批次加入歌曲</h1>
-    <p class="hint">每行一首，可以混著輸入：YouTube 影片網址、歌單網址（會加入歌單裡的每一首），或「歌手 歌名」（會到 YouTube 搜尋第一筆結果）。也可以直接從 Excel 複製「歌手、曲名」兩欄貼上，或匯入 .xlsx／.csv 檔。</p>
+    <p class="hint">每行一首，可以混著輸入：YouTube 影片網址、歌單網址（會加入歌單裡的每一首），或「歌手 歌名」（會到 YouTube 搜尋第一筆結果）。也可以直接從 Excel 複製「歌手、曲名」兩欄貼上，或匯入 .xlsx／.csv 檔：匯入檔案時會一起讀「歌手」「曲名」「KEY（或備註）」「語言」和 YouTube 網址欄，有網址的直接用、不另外搜尋；歌曲庫已經有的歌只會更新這些資訊，不會重新下載。格式可以參考「下載範本」或說明頁的「建議的匯入表格格式」。</p>
     <textarea id="batch-text" rows="7" placeholder="https://www.youtube.com/watch?v=…&#10;https://www.youtube.com/playlist?list=…&#10;周杰倫 晴天&#10;YOASOBI 夜に駆ける"></textarea>
     <div class="row">
       <button id="batch-resolve" class="primary">查詢</button>
       <label class="btn ghost">匯入 Excel／CSV<input id="batch-file" type="file" accept=".xlsx,.csv,.txt,.tsv" hidden></label>
+      <button id="batch-template" class="ghost" title="歌手、曲名、KEY、語言、YouTube 五欄的範例表格">下載範本</button>
       <span id="batch-msg" class="hint"></span>
     </div>
     <div id="batch-list" class="batch-list"></div>
@@ -379,6 +389,21 @@
       <span class="hint">依清單順序下載與處理，之後也可以在歌曲庫上方用 ▲▼ 調整順序。請只下載你有權使用的內容。</span>
     </div>
     <div class="row" style="justify-content:flex-end"><button id="batch-close" class="ghost">關閉</button></div>
+  </div>
+</div>
+
+<div id="edit-dlg" class="modal" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="edit-title">
+    <h1 id="edit-title">編輯歌曲資訊</h1>
+    <label class="field"><span>曲名</span><input id="ed-title" type="text" maxlength="120"></label>
+    <label class="field"><span>歌手</span><input id="ed-artist" type="text" maxlength="80"></label>
+    <label class="field"><span>預設 KEY（打開這首歌時自動切到這個 KEY，並先做好移調版本）</span>
+      <select id="ed-key"></select></label>
+    <p class="hint" id="ed-yt"></p>
+    <div class="row">
+      <button id="ed-save" class="primary">儲存</button>
+      <button id="ed-close" class="ghost">取消</button>
+    </div>
   </div>
 </div>
 
@@ -463,9 +488,15 @@
     <label class="field"><span>人聲分離模型</span><input id="cfg-sep" type="text"></label>
     <label class="field"><span>主唱／合音分離品質（合音多的歌，高品質的旋律會準很多）</span>
       <select id="cfg-kq"><option value="auto">自動（有顯示卡用高品質）</option><option value="high">高品質（沒有顯示卡會非常慢）</option><option value="standard">標準（快）</option></select></label>
+    <label class="field"><span>高品質分離的速度（大量匯入時建議「快速」）</span>
+      <select id="cfg-kov"><option value="2">快速（建議，結果幾乎相同）</option><option value="4">最精細（約慢一倍）</option></select></label>
+    <label class="row"><input id="cfg-autofine" type="checkbox" checked> 合音多、需要更精細處理的歌，自動再用最精細的方式分一次（排在佇列最後，不影響其他歌的處理）</label>
     <label class="field"><span>主唱／合音分離模型（標準）</span><input id="cfg-kara" type="text"></label>
     <label class="field"><span>音高模型</span>
       <select id="cfg-pitch"><option value="auto">自動（有顯示卡用 full）</option><option value="full">full（準、CPU 很慢）</option><option value="tiny">tiny（快）</option></select></label>
+    <div class="field"><span>儲存空間</span>
+      <div class="hint" id="storage-info"></div>
+      <div><button id="storage-compact" hidden>轉成 FLAC 節省空間</button></div></div>
     <div class="row">
       <button id="cfg-save" class="primary">儲存</button>
       <button id="cfg-close" class="ghost">關閉</button>

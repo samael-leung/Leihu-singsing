@@ -67,12 +67,17 @@ FunctionEnd
   ${IfNot} ${FileExists} "$PS"
     StrCpy $PS "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe"
   ${EndIf}
-  nsExec::Exec `"$PS" -NoProfile -NonInteractive -Command "Get-CimInstance Win32_Process | Where-Object { $$_.ExecutablePath -like '${DIR}\python\*' } | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force }"`
+  nsExec::Exec `"$PS" -NoProfile -NonInteractive -Command "Get-CimInstance Win32_Process | Where-Object { ($$_.ExecutablePath -like '${DIR}\python\*' -or $$_.ExecutablePath -like '${DIR}\secure-runtime\*') } | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force }"`
   Pop $0
   Sleep 1500
 !macroend
 
 Function LaunchApp
+  ${If} ${FileExists} "$INSTDIR\secure-runtime\leihu-ready.json"
+  ${AndIf} ${FileExists} "$INSTDIR\secure-runtime\Scripts\pythonw.exe"
+    Exec '"$INSTDIR\secure-runtime\Scripts\pythonw.exe" "$INSTDIR\desktop.py"'
+    Return
+  ${EndIf}
   Exec '"$INSTDIR\python\pythonw.exe" "$INSTDIR\desktop.py"'
 FunctionEnd
 
@@ -114,10 +119,15 @@ Section "Install"
   ${EndIf}
 
   ; 捷徑
-  CreateShortCut "$DESKTOP\${APPNAME}.lnk" "$INSTDIR\python\pythonw.exe" '"$INSTDIR\desktop.py"' "$INSTDIR\static\icon.ico" 0
+  StrCpy $0 "$INSTDIR\python\pythonw.exe"
+  ${If} ${FileExists} "$INSTDIR\secure-runtime\leihu-ready.json"
+  ${AndIf} ${FileExists} "$INSTDIR\secure-runtime\Scripts\pythonw.exe"
+    StrCpy $0 "$INSTDIR\secure-runtime\Scripts\pythonw.exe"
+  ${EndIf}
+  CreateShortCut "$DESKTOP\${APPNAME}.lnk" "$0" '"$INSTDIR\desktop.py"' "$INSTDIR\static\icon.ico" 0
   CreateShortCut "$DESKTOP\${APPNAME} 完整移除.lnk" "$INSTDIR\clean-uninstall.exe"
   CreateDirectory "$SMPROGRAMS\${APPNAME}"
-  CreateShortCut "$SMPROGRAMS\${APPNAME}\${APPNAME}.lnk" "$INSTDIR\python\pythonw.exe" '"$INSTDIR\desktop.py"' "$INSTDIR\static\icon.ico" 0
+  CreateShortCut "$SMPROGRAMS\${APPNAME}\${APPNAME}.lnk" "$0" '"$INSTDIR\desktop.py"' "$INSTDIR\static\icon.ico" 0
   CreateShortCut "$SMPROGRAMS\${APPNAME}\${APPNAME} 修復與更新.lnk" "$PS" '-NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\setup\install.ps1" -AppDir "$INSTDIR" -Repair' "$INSTDIR\static\icon.ico" 0
   CreateShortCut "$SMPROGRAMS\${APPNAME}\${APPNAME} 修復（強制使用顯示卡加速）.lnk" "$PS" '-NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\setup\install.ps1" -AppDir "$INSTDIR" -Repair -Gpu cu128' "$INSTDIR\static\icon.ico" 0
   CreateShortCut "$SMPROGRAMS\${APPNAME}\${APPNAME} 使用說明.lnk" "$INSTDIR\使用說明.html"

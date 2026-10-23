@@ -26,10 +26,14 @@ try {
     Where-Object { $_.ExecutablePath -like "$AppDir\python\*" } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
   $py = Join-Path $AppDir "python\python.exe"
+  if ((Test-Path "$AppDir\secure-runtime\leihu-ready.json") -and (Test-Path "$AppDir\secure-runtime\Scripts\python.exe")) {
+    $py = Join-Path $AppDir "secure-runtime\Scripts\python.exe"
+  }
   if (Test-Path $py) {
     # 上次安裝中斷時 Python 可能只解壓縮了一半：能執行才沿用，不能就整個重下
     & $py -c "import sys, zipfile, json, ssl" 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) {
+      if ($py -like "$AppDir\secure-runtime\*") { throw "The updated Python environment is incomplete; run setup/repair-runtime.ps1 again." }
       Say "偵測到不完整的 Python（可能是上次安裝中斷），清除後重新下載…"
       Remove-Item (Join-Path $AppDir "python") -Recurse -Force -ErrorAction SilentlyContinue
     }

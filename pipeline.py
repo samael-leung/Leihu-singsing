@@ -1,11 +1,11 @@
 """練唱台：音訊處理流程。
 
 每首歌存在 library/<id>/：
-  original.*        匯入的原始檔
-  mix.wav           44.1kHz 立體聲
-  lead.wav          主唱
-  back.wav          合音
-  inst.wav          伴奏
+  original.*        匯入的原始檔（轉成 mix 後刪除）
+  mix.flac          44.1kHz 立體聲（舊版是 .wav，照樣讀得到）
+  lead.flac         主唱
+  back.flac         合音
+  inst.flac         伴奏
   pitch.json        主唱音高曲線與音符
   lyrics.lrc        歌詞（含時間）
   v2_k+2_s100/      移調／變速後的分軌快取
@@ -44,6 +44,8 @@ DEFAULT_CONFIG = {
     "separation_model": "UVR-MDX-NET-Inst_HQ_3.onnx",
     "karaoke_model": "UVR_MDXNET_KARA_2.onnx",
     "karaoke_quality": "auto",   # auto：有顯示卡用高品質（Roformer）；standard；high
+    "karaoke_overlap": 2,
+    "auto_fine": True,   # 合音多的歌，處理完自動排一次最精細的主唱分離（排在佇列最後）   # 高品質主唱分離的重疊次數：2＝快（建議），4＝模型預設、約慢一倍
     "whisper_model": "large-v3-turbo",
     "lyrics_language": "",   # 空字串＝自動判斷
     "convert_to_taiwan": True,
@@ -223,6 +225,77 @@ def list_songs() -> list[dict]:
     return out
 
 
+# ---------------------------------------------------------------- 歌曲庫搜尋（繁簡互通＋相近歌名）
+
+_T2S = None
+_SKEY_CACHE: dict = {}
+
+
+def search_key(text: str) -> str:
+    """搜尋用的正規化：全形半形統一、轉小寫、繁體一律轉成簡體（繁簡多對一，兩邊都會對到同一個字）。"""
+    global _T2S
+    import unicodedata
+    t = unicodedata.normalize("NFKC", text or "").lower()
+    if re.search(r"[\u3400-\u9fff]", t):
+        if _T2S is None:
+            try:
+                from opencc import OpenCC
+                _T2S = OpenCC("t2s")
+            except Exception:
+                _T2S = False
+        if _T2S:
+            t = _T2S.convert(t)
+    return t
+
+
+def _song_search_key(m: dict) -> str:
+    hay = " ".join(str(x) for x in (m.get("title"), m.get("artist"), m.get("yt_title"), m.get("yt_artist"), m.get("yt_track"), m.get("yt_uploader"),
+                                    m.get("category"), m.get("lyrics_text"),
+                                    (m.get("lyrics_online") or {}).get("artist") if isinstance(m.get("lyrics_online"), dict) else None)
+                   if x)
+    k = _SKEY_CACHE.get(hay)
+    if k is None:
+        k = _SKEY_CACHE[hay] = search_key(hay)
+        if len(_SKEY_CACHE) > 5000:
+            _SKEY_CACHE.clear()
+    return k
+
+
+def _bigrams(s: str) -> set:
+    return {s[i:i + 2] for i in range(len(s) - 1)} or ({s} if s else set())
+
+
+def search_songs(q: str) -> dict:
+    """回傳完全符合的歌曲（每個關鍵字都要出現，繁簡互通），以及歌名相近的推薦。"""
+    from difflib import SequenceMatcher
+    nq = search_key(q).strip()
+    if not nq:
+        return {"match": [], "similar": []}
+    words = nq.split()
+    squash = lambda s: re.sub(r"[\W_]+", "", s)
+    qq = squash(nq)
+    match, sim = [], []
+    for m in list_songs():
+        key = _song_search_key(m)
+        if all(w in key for w in words):
+            match.append(m["id"])
+            continue
+        if len(qq) < 2:
+            continue
+        best = 0.0
+        for name in (m.get("title"), m.get("yt_track")):
+            tk = squash(search_key(name or ""))
+            if not tk:
+                continue
+            ratio = SequenceMatcher(None, qq, tk).ratio()
+            cover = len(_bigrams(qq) & _bigrams(tk)) / len(_bigrams(qq))   # 輸入的字有多少出現在歌名裡
+            best = max(best, ratio, cover * 0.9)
+        if best >= 0.45:
+            sim.append((best, m["id"]))
+    sim.sort(reverse=True)
+    return {"match": match, "similar": [i for _, i in sim[:6]]}
+
+
 def _blank_song(title: str, **extra) -> str:
     LIB.mkdir(exist_ok=True)
     sid = uuid.uuid4().hex[:10]
@@ -287,7 +360,7 @@ def clean_youtube_url(url: str) -> str:
 
 # ---------------------------------------------------------------- 批次匯入（多個網址、歌單、歌名搜尋、Excel）
 
-BATCH_MAX = 200
+BATCH_MAX = 1000   # 一次最多幾首（表單可能有好幾百首）
 
 
 def _ydl():
@@ -342,39 +415,62 @@ def resolve_line(line: str) -> list[dict]:
         return items[:1]
 
 
-def resolve_lines(lines: list[str]) -> list[dict]:
-    """多行一起解析（同時查 4 行）。每一行的結果依原本順序排好；失敗的行也會列出來，附上原因。"""
+def resolve_lines(lines: list, rows=None) -> list[dict]:
+    """多行一起解析（同時查 4 行）。每一行的結果依原本順序排好；失敗的行也會列出來，附上原因。
+    rows：從表單讀到的資料（以 line 對應）。表單有 YouTube 網址的直接用，不去搜尋；
+    歌曲庫裡已經有同一個網址的歌，標成「更新資訊」（套用表單的歌手、曲名、KEY，不重新下載）。"""
     from concurrent.futures import ThreadPoolExecutor
-    lines = [l for l in (x.strip() for x in lines) if l][:BATCH_MAX]
-    existing = {m.get("source_url"): m.get("title") for m in list_songs() if m.get("source_url")}
+    if isinstance(rows, list):   # 表單：每一列各自對應（同名的歌也不會混在一起）
+        pairs = [(str(r.get("line") or "").strip(), r, r.get("row") or i + 2) for i, r in enumerate(rows) if isinstance(r, dict)]
+        pairs = [p for p in pairs if p[0]][:BATCH_MAX]
+    else:
+        rows = rows or {}
+        pairs = [(l, rows.get(l) or {}, None) for l in (str(x).strip() for x in lines) if l][:BATCH_MAX]
+    by_url = {m.get("source_url"): m for m in list_songs() if m.get("source_url") and (m.get("steps") or {}).get("import")}
+    # 已經下載好或正在排隊的算重複；之前下載失敗／取消的不算（勾選後會用原本那一項重新下載）
+    existing = {m.get("source_url"): m.get("title") for m in list_songs()
+                if m.get("source_url") and ((m.get("steps") or {}).get("import") or m.get("dl_state") not in ("failed", "cancelled"))}
 
-    def one(line):
+    def one(pair):
+        line, row, rowno = pair
+        meta = {k: row.get(k) for k in ("artist", "song", "key", "lang", "category") if row.get(k) not in (None, "")}
         try:
-            items = resolve_line(line)
-            return [dict(it, input=line) for it in items] or [{"input": line, "error": "找不到符合的影片"}]
+            if row.get("url"):
+                items = [{"id": row["url"][-11:], "url": row["url"], "title": row.get("song") or line,
+                          "duration": None, "channel": row.get("artist") or "", "from": "表單網址"}]
+            else:
+                items = resolve_line(line)
+            return [dict(it, input=line, sheet=meta or None, row=rowno) for it in items] \
+                or [{"input": line, "error": "找不到符合的影片", "row": rowno}]
         except UserError as e:
-            return [{"input": line, "error": str(e)}]
+            return [{"input": line, "error": str(e), "row": rowno}]
         except Exception as e:
             log_error(f"resolve({line})", e)
-            return [{"input": line, "error": f"查詢失敗：{type(e).__name__}"}]
+            return [{"input": line, "error": f"查詢失敗：{type(e).__name__}", "row": rowno}]
     with ThreadPoolExecutor(max_workers=4) as pool:
-        groups = list(pool.map(one, lines))
+        groups = list(pool.map(one, pairs))
     out, seen = [], set()
     for g in groups:
         for it in g:
             if it.get("url"):
                 it["dup"] = existing.get(it["url"]) or ("（清單裡重複）" if it["url"] in seen else None)
+                old = by_url.get(it["url"])
+                if old and it.get("sheet") and it["url"] not in seen:   # 舊歌：用表單資料更新
+                    it["dup"] = None
+                    it["update"] = {"id": old["id"], "title": old.get("title")}
                 seen.add(it["url"])
             out.append(it)
     return out[:BATCH_MAX]
 
 
-def read_sheet(data: bytes, name: str) -> list[str]:
-    """讀 Excel（.xlsx）或 CSV：有「歌手」「曲名」欄位就組成「歌手 曲名」，否則把每一列的文字接起來。"""
+def read_sheet(data: bytes, name: str) -> list[dict]:
+    """讀 Excel（.xlsx）或 CSV。認得「歌手」「曲名」「備註／KEY」「語言」和 YouTube 網址欄：
+    回傳每一列 {line, artist, song, key, lang, url}。line 是給搜尋用的「歌手 曲名」（沒有網址時才會去搜尋）。"""
     import csv
     import io
     ext = Path(name).suffix.lower()
     rows: list[list[str]] = []
+    nums: list[int] = []   # 每一列在表單裡是第幾列（給使用者對照）
     if ext == ".xlsx":
         import zipfile
         import xml.etree.ElementTree as ET
@@ -408,6 +504,7 @@ def read_sheet(data: bytes, name: str) -> list[str]:
                 cells[col] = (val or "").strip()
             if cells:
                 rows.append([cells.get(i, "") for i in range(1, max(cells) + 1)])
+                nums.append(int(r.get("r") or len(rows)))
     elif ext in (".csv", ".txt", ".tsv"):
         text = None
         for enc in ("utf-8-sig", "big5", "gbk"):
@@ -420,30 +517,151 @@ def read_sheet(data: bytes, name: str) -> list[str]:
             raise UserError("讀不到這個檔案的文字編碼")
         dialect = "excel-tab" if ext == ".tsv" or ("\t" in text and "," not in text) else "excel"
         rows = [[c.strip() for c in r] for r in csv.reader(io.StringIO(text), dialect=dialect)]
+        nums = list(range(1, len(rows) + 1))
     elif ext == ".xls":
         raise UserError("舊版 Excel（.xls）請先另存成 .xlsx 或 .csv")
     else:
         raise UserError("只支援 .xlsx、.csv 或 .txt")
-    rows = [r for r in rows if any(r)]
+    keep = [i for i, r in enumerate(rows) if any(r)]
+    rows, nums = [rows[i] for i in keep], [nums[i] for i in keep]
     if not rows:
         return []
     head = [c.lower() for c in rows[0]]
     find = lambda keys: next((i for i, c in enumerate(head) if any(k in c for k in keys)), None)
     ai = find(["歌手", "演唱", "藝人", "artist", "singer"])
     ti = find(["曲名", "歌名", "歌曲", "標題", "title", "song", "name"])
+    ki = find(["key", "升降", "調"])
+    if ki is None:
+        ki = find(["備註", "note", "memo"])   # 雷虎的歌單：備註欄放的是升降 KEY
+    li = find(["語言", "language", "lang"])
+    ui = find(["ytlink", "youtube", "yt"])
+    cell = lambda r, i: r[i].strip() if i is not None and i < len(r) else ""
+    yt_re = re.compile(r"(https?://)?([\w-]+\.)*(youtube\.com|youtu\.be)/\S+", re.I)
     out = []
     if ai is not None or ti is not None:
-        for r in rows[1:]:
-            parts = [r[i] for i in (ai, ti) if i is not None and i < len(r) and r[i]]
-            if parts:
-                out.append(" ".join(parts))
+        for r, rowno in zip(rows[1:], nums[1:]):
+            artist, song = cell(r, ai), cell(r, ti)
+            if not (artist or song):
+                continue
+            url = ""
+            for c in ([cell(r, ui)] if ui is not None else []) + list(r):   # 先看網址欄，沒有再找整列
+                m = yt_re.search(c or "")
+                if m:
+                    try:
+                        url = clean_youtube_url(m.group(0))
+                        break
+                    except UserError:
+                        continue
+            lang = sheet_language(cell(r, li))
+            out.append({"line": " ".join(x for x in (artist, song) if x), "artist": artist, "song": song,
+                        "key": parse_key(cell(r, ki)), "lang": lang[0] if lang else None,
+                        "category": lang[1] if lang else None, "url": url, "row": rowno})
     else:
-        out = [" ".join(c for c in r if c) for r in rows]
+        out = [{"line": " ".join(c for c in r if c)} for r in rows]
     return out[:BATCH_MAX]
 
 
+# ---------------------------------------------------------------- 曲名／歌手／預設 KEY
+
+LANG_FROM_SHEET = [   # 表單「語言」欄 → 歌詞辨識語言、分類名稱
+    (("國語", "華語", "中文", "普通話", "mandarin", "chinese"), "zh", "中文歌"),
+    (("台語", "閩南語", "台灣話", "taiwanese", "hokkien"), "zh", "台語歌"),
+    (("粵語", "廣東話", "cantonese"), "yue", "粵語歌"),
+    (("日語", "日文", "日本", "japanese"), "ja", "日文歌"),
+    (("英語", "英文", "english"), "en", "英文歌"),
+    (("韓語", "韓文", "韓國", "korean"), "ko", "韓文歌"),
+]
+
+
+def sheet_language(text: str) -> tuple[str, str] | None:
+    t = (text or "").strip().lower()
+    for words, code, cat in LANG_FROM_SHEET:
+        if t and any(w in t for w in words):
+            return code, cat
+    return None
+
+
+def parse_key(text) -> int | None:
+    """表單裡的 KEY：-4、+2、4、＋３、=4（＝升 4）這類純數字才算，超過 ±6 的不採用。"""
+    import unicodedata
+    t = unicodedata.normalize("NFKC", str(text or "")).strip().replace("−", "-")
+    if t.startswith("="):
+        t = t[1:].strip()
+    if not re.fullmatch(r"[+-]?\d{1,2}(?:\.0+)?", t):
+        return None
+    k = int(float(t))
+    return k if -6 <= k <= 6 else None
+
+
+_NOISE_RE = re.compile(r"\s*[\(（\[【「]?\s*(?:official\s*(?:music\s*)?(?:video|mv|audio|lyric(?:s)?\s*video)|"
+                       r"music\s*video|lyric(?:s)?\s*video|官方\s*(?:完整版\s*)?(?:mv|音樂錄影帶|版)?|完整版|"
+                       r"動態歌詞(?:版)?|歌詞版|高音質|hd|4k|mv|audio)\s*[\)）\]】」]?\s*", re.I)
+
+
+def split_artist_title(yt_title: str, track: str = "", artist: str = "") -> tuple[str, str]:
+    """從 YouTube 的資訊拆出（歌手, 曲名）。YouTube 有提供曲名就用；沒有就從標題常見寫法拆，拆不出來歌手留空。"""
+    if track:
+        return (artist or "").split(",")[0].strip(), track.strip()
+    t = (yt_title or "").strip()
+    m = re.match(r"^(.+?)\s*[【《「『〈]([^】》」』〉]+)[】》」』〉](.*)$", t)
+    if m and not _NOISE_RE.fullmatch(m.group(2)):
+        return m.group(1).strip(" -｜|/"), m.group(2).strip()
+    clean = _NOISE_RE.sub(" ", t).strip()
+    m = re.match(r"^(.+?)\s+[-–—｜|]\s+(.+)$", clean)
+    if m:
+        return m.group(1).strip(), m.group(2).strip()
+    return "", re.sub(r"\s+", " ", clean).strip() or t
+
+
+# YouTube 下載的狀態：排隊中／失敗／取消。寫在 meta 的 dl_state，歌名後面也標出來；下載成功就拿掉
+DL_SUFFIX = {"queued": "（排隊下載）", "failed": "（下載失敗）", "cancelled": "（已取消下載）", "paused": "（暫停下載）"}
+_DL_RE = re.compile("（(?:排隊下載|下載失敗|已取消下載|暫停下載)）$")
+
+# YouTube 暫時限制這個 IP（429、要求登入確認不是機器人）時，暫停後面所有的下載，不再繼續送請求；
+# 使用者確認後按「繼續下載」才會接著下載。只記在記憶體：程式重開時暫停的歌會留著「重新下載」按鈕。
+YT_PAUSE: dict = {"on": False, "at": 0.0, "reason": ""}
+_RATE_LIMIT_RE = re.compile(r"HTTP Error 429|Too Many Requests|Sign in to confirm you(?:'|’)re not a bot|"
+                            r"confirm you(?:'|’)re not a bot|rate[- ]limit|try again later", re.I)
+
+
+class YouTubeRateLimited(UserError):
+    pass
+
+
+def set_dl_state(d: Path, state: str | None) -> None:
+    meta = read_meta(d)
+    base = _DL_RE.sub("", meta.get("title") or "").strip()
+    if base.startswith("YouTube 下載"):
+        base = ""
+    if state:
+        meta["dl_state"] = state
+        meta["title"] = (base or "YouTube 影片") + DL_SUFFIX[state]
+    else:
+        meta.pop("dl_state", None)
+        meta["title"] = base or "YouTube 歌曲"
+    write_meta(d, meta)
+
+
+def pending_downloads() -> list[dict]:
+    """還沒下載完成的 YouTube 歌曲（程式關掉時還在排隊的、失敗的、取消的）。
+    舊版沒有記錄狀態：歌名結尾是（排隊下載）的就當作排隊中，有錯誤訊息的當作失敗。"""
+    out = []
+    for m in list_songs():
+        if not m.get("source_url") or (m.get("steps") or {}).get("import"):
+            continue
+        st = m.get("dl_state")
+        if not st:
+            title = m.get("title") or ""
+            if not (title.endswith("（排隊下載）") or title.startswith("YouTube 下載")):
+                continue
+            st = "failed" if m.get("notes") else "queued"
+            set_dl_state(song_dir(m["id"]), st)
+        out.append({**m, "dl_state": st})
+    return out
+
+
 def new_youtube_song(url: str, title: str = "") -> str:
-    return _blank_song((title + "（排隊下載）") if title else "YouTube 下載中…", source_url=url)
+    return _blank_song((title or "YouTube 影片") + DL_SUFFIX["queued"], source_url=url, dl_state="queued")
 
 
 def _upgrade_ytdlp() -> None:
@@ -479,7 +697,8 @@ def step_youtube(d: Path, url: str, report) -> None:
                 line = line.strip()
                 if line.startswith("TITLE "):
                     title = line[6:]
-                    update_meta(d, title=title[:120])
+                    if not read_meta(d).get("title_locked"):
+                        update_meta(d, title=title[:120])
                 elif line.startswith("META "):
                     track, artist, uploader = (line[5:].split("\t") + ["", "", ""])[:3]
                     clean = lambda v: "" if v in ("NA", "None") else v.strip()
@@ -502,8 +721,12 @@ def step_youtube(d: Path, url: str, report) -> None:
                     p.kill(); p.wait()
             p.stdout.close()
 
+    if YT_PAUSE["on"]:
+        raise YouTubeRateLimited("YouTube 下載暫停中")
     report("取得影片資訊", 0.01)
     code, title, err = attempt()
+    if code and _RATE_LIMIT_RE.search(err):   # 被限制時不要再更新 yt-dlp 重試，避免送更多請求
+        raise YouTubeRateLimited(err.strip()[-200:])
     if code:
         if re.search(r"Private video|Video unavailable|This video is unavailable|members-only|"
                      r"confirm your age|age-restricted|age restricted", err):
@@ -511,6 +734,8 @@ def step_youtube(d: Path, url: str, report) -> None:
         report("下載失敗，更新 yt-dlp 後重試", 0.02)
         _upgrade_ytdlp()
         code, title, err = attempt()
+        if code and _RATE_LIMIT_RE.search(err):
+            raise YouTubeRateLimited(err.strip()[-200:])
         if code:
             raise UserError(f"YouTube 下載失敗：{err.strip()[-240:]}")
     for f in d.glob("original.*"):
@@ -518,24 +743,95 @@ def step_youtube(d: Path, url: str, report) -> None:
             f.unlink(missing_ok=True)
     if not (d / "original.wav").exists():
         raise UserError("YouTube 下載完成，但找不到轉換後的音訊檔")
-    update_meta(d, title=(title or "YouTube 歌曲")[:120], source_url=url)
+    meta = read_meta(d)
+    yt = (title or "YouTube 歌曲")[:120]
+    if meta.get("title_locked"):   # 從表單匯入：曲名、歌手用表單的寫法
+        update_meta(d, yt_title=yt, source_url=url)
+    else:
+        artist, song = split_artist_title(yt, meta.get("yt_track", ""), meta.get("yt_artist", ""))
+        update_meta(d, title=(song or yt)[:120], artist=(meta.get("artist") or artist)[:80], yt_title=yt,
+                    source_url=url)
+    set_dl_state(d, None)
 
 
-def youtube_job(song_id: str, url: str):
+# 預先下載：顯示卡在處理這首歌的時候，背景先把佇列裡接下來的 YouTube 歌下載好（網路和顯示卡同時工作）。
+# 每首歌一把鎖，同一首不會同時被預先下載和正式處理。
+_DL_LOCKS: dict = {}
+_DL_LOCKS_GUARD = threading.Lock()
+
+
+def _dl_lock(song_id: str) -> threading.Lock:
+    with _DL_LOCKS_GUARD:
+        return _DL_LOCKS.setdefault(song_id, threading.Lock())
+
+
+def prefetch_youtube(song_id: str) -> bool:
+    """先下載一首還在排隊的 YouTube 歌（只下載，不處理）。回傳有沒有真的下載。"""
+    lock = _dl_lock(song_id)
+    if not lock.acquire(blocking=False):
+        return False
+    try:
+        d = song_dir(song_id)
+        meta = read_meta(d)
+        if YT_PAUSE["on"] or meta.get("steps", {}).get("import") or meta.get("prefetched") \
+                or meta.get("prefetch_failed") or meta.get("dl_state") != "queued" or not meta.get("source_url"):
+            return False
+        try:
+            step_youtube(d, meta["source_url"], lambda *a: None)
+        except YouTubeRateLimited as e:
+            if not YT_PAUSE["on"]:
+                YT_PAUSE.update(on=True, at=time.time(), reason=str(e))
+                log_error("youtube rate limited (prefetch)", e)
+            set_dl_state(d, "queued")
+            return False
+        except Exception as e:   # 預先下載失敗沒關係，輪到這首時會再正式下載一次（失敗才標示）
+            log_error(f"prefetch {song_id}", e)
+            update_meta(d, prefetch_failed=True)
+            set_dl_state(d, "queued")
+            return False
+        update_meta(d, prefetched=True)
+        set_dl_state(d, "queued")   # 還沒處理，維持「排隊」；程式重開也會接著處理
+        return True
+    finally:
+        lock.release()
+
+
+def youtube_job(song_id: str, url: str, after=None):
+    """after(song_id)：整首處理完後要做的事（例如先把預設 KEY 的移調版本做好）。"""
     process = process_song(song_id, ["import", "separate", "pitch", "lyrics"])
 
     def run(report):
         d = song_dir(song_id)
+        update_meta(d, notes=[])
         try:
-            step_youtube(d, url, report)
+            with _dl_lock(song_id):   # 正在預先下載這首時，等它下載完
+                meta = read_meta(d)
+                if meta.get("prefetched") and any(d.glob("original.*")):
+                    report("已預先下載完成", 0.06)
+                    update_meta(d, prefetched=False)
+                    set_dl_state(d, None)
+                else:
+                    step_youtube(d, url, report)
+        except JobCancelled:
+            set_dl_state(d, "cancelled")
+            raise
+        except YouTubeRateLimited as e:
+            if not YT_PAUSE["on"]:
+                YT_PAUSE.update(on=True, at=time.time(), reason=str(e))
+                log_error("youtube rate limited", e)
+            set_dl_state(d, "paused")
+            update_meta(d, notes=["YouTube 暫時限制下載，已暫停。過幾小時後按「繼續下載」或「重新下載」。"])
+            return   # 不算錯誤：後面排隊的歌也會照樣停下來，不會再連到 YouTube
         except Exception as e:
-            meta = read_meta(d)
-            if meta.get("title", "").startswith("YouTube 下載中"):
-                meta["title"] = "YouTube 下載失敗"
-            meta["notes"] = [f"{e}　可以刪除這一項後重試。"]
-            write_meta(d, meta)
+            set_dl_state(d, "failed")
+            update_meta(d, notes=[f"{e}　可以按「重新下載」再試一次，或刪除這一項。"])
             raise
         process(report)
+        if after:
+            try:
+                after(song_id)
+            except Exception as e:
+                log_error("youtube_job after", e)
     return run
 
 
@@ -554,8 +850,104 @@ def read_audio(path: Path, sr: int = SR, mono: bool = False) -> np.ndarray:
 
 
 def write_wav(path: Path, y: np.ndarray, sr: int = SR) -> None:
+    """寫成 16 位元音訊；副檔名是 .flac 就存成 FLAC（無損壓縮，大小約 WAV 的一半，音質完全相同）。"""
     data = y.T if y.ndim == 2 else y
     sf.write(str(path), np.clip(data, -1.0, 1.0), sr, subtype="PCM_16")
+
+
+# 分軌（mix／lead／back／inst，含移調版本）存成 FLAC；舊的 WAV 照樣讀得到，可以在設定裡一次轉換。
+STEM_EXT = ".flac"
+
+
+def stem_path(base: Path, name: str) -> Path:
+    """某個分軌的檔案：有 FLAC 用 FLAC，沒有再找舊的 WAV；都沒有時回傳要寫入的 FLAC 路徑。"""
+    for ext in (".flac", ".wav"):
+        p = base / f"{name}{ext}"
+        if p.exists():
+            return p
+    return base / f"{name}{STEM_EXT}"
+
+
+def storage_report() -> dict:
+    """歌曲庫佔用的空間，以及轉成 FLAC、刪掉原始檔後大約可以省多少。"""
+    total = convertible = removable = 0
+    songs = 0
+    for d in LIB.iterdir() if LIB.exists() else []:
+        if not d.is_dir():
+            continue
+        songs += 1
+        for f in d.rglob("*"):
+            if not f.is_file():
+                continue
+            sz = f.stat().st_size
+            total += sz
+            if f.suffix == ".wav" and f.stem in ("mix", *STEMS) and f.parent.name != "takes":
+                convertible += sz
+            elif f.name.startswith("original.") and (stem_path(d, "mix").exists()):
+                removable += sz
+            elif f.parent.name.startswith("v_k"):
+                removable += sz
+    # FLAC 通常是 WAV 的 40～60%，用 50% 估
+    return {"songs": songs, "bytes": total, "convertible": convertible, "removable": removable,
+            "saving": int(convertible * 0.5) + removable}
+
+
+def compact_song(d: Path, busy=lambda: False) -> int:
+    """把一首歌的舊 WAV 分軌（含移調版本）轉成 FLAC、刪掉已經不需要的原始檔。回傳省下的位元組。
+    轉換是逐位元相同的無損壓縮，先寫暫存檔、確認長度一樣才取代原檔。"""
+    saved = 0
+    meta = read_meta(d)
+    bases = [d] + [v for v in d.iterdir() if v.is_dir() and v.name.startswith("v2_")]
+    for base in bases:
+        if any(base.glob("*.tmp.*")) or busy():   # 正在產生的移調版本：這次先跳過
+            continue
+        for name in ("mix", *STEMS):
+            w = base / f"{name}.wav"
+            if not w.exists():
+                continue
+            info = sf.info(str(w))
+            y, sr = sf.read(str(w), dtype="int16" if info.subtype == "PCM_16" else "float32", always_2d=True)
+            tmp = base / f"{name}.tmp.flac"
+            sf.write(str(tmp), y, sr, subtype="PCM_16")
+            if sf.info(str(tmp)).frames != info.frames:
+                tmp.unlink(missing_ok=True)
+                raise IOError(f"{w.name} 轉換後長度不符，保留原檔")
+            before = w.stat().st_size
+            tmp.replace(base / f"{name}.flac")
+            w.unlink()
+            saved += before - (base / f"{name}.flac").stat().st_size
+    for v in [v for v in d.iterdir() if v.is_dir() and v.name.startswith("v_k")]:   # 1.3 以前的移調版本，已經用不到
+        saved += sum(f.stat().st_size for f in v.rglob("*") if f.is_file())
+        shutil.rmtree(v, ignore_errors=True)
+    if (meta.get("steps") or {}).get("import") and stem_path(d, "mix").exists():
+        for f in d.glob("original.*"):
+            saved += f.stat().st_size
+            f.unlink(missing_ok=True)
+    return saved
+
+
+def compact_library(report, busy_song=lambda sid: False) -> None:
+    dirs = [d for d in LIB.iterdir() if d.is_dir() and (d / "meta.json").exists()]
+    saved, errors = 0, 0
+    for i, d in enumerate(dirs):
+        report(f"轉成 FLAC 節省空間 {i + 1}/{len(dirs)}（已省 {saved / 1e9:.1f} GB）", i / max(1, len(dirs)))
+        try:
+            saved += compact_song(d, lambda: busy_song(d.name))
+        except Exception as e:
+            errors += 1
+            log_error(f"compact {d.name}", e)
+    report(f"完成：省下 {saved / 1e9:.1f} GB" + (f"，{errors} 首沒有轉換（詳見紀錄）" if errors else ""), 1.0)
+
+
+def save_stem(base: Path, name: str, y: np.ndarray, sr: int = SR) -> Path:
+    """寫入分軌（先寫暫存檔再改名，中途中斷不會留下壞檔），並刪掉同名的舊 WAV。"""
+    out = base / f"{name}{STEM_EXT}"
+    tmp = base / f"{name}.tmp{STEM_EXT}"
+    write_wav(tmp, y, sr)
+    tmp.replace(out)
+    if STEM_EXT != ".wav":
+        (base / f"{name}.wav").unlink(missing_ok=True)
+    return out
 
 
 def fit_length(y: np.ndarray, n: int) -> np.ndarray:
@@ -630,10 +1022,10 @@ def integrated_loudness(y: np.ndarray, sr: int) -> float | None:
 def measure_loudness(d: Path) -> dict:
     """量 mix.wav 的響度與峰值，記在 meta（只算一次）。"""
     meta = read_meta(d)
-    if meta.get("lufs") is not None or not (d / "mix.wav").exists():
+    if meta.get("lufs") is not None or not stem_path(d, "mix").exists():
         return meta
     try:
-        y = read_audio(d / "mix.wav")
+        y = read_audio(stem_path(d, "mix"))
         lufs = integrated_loudness(y, SR)
         peak = float(np.max(np.abs(y))) if y.size else 0.0
         return update_meta(d, lufs=lufs, peak_db=round(20 * np.log10(max(peak, 1e-6)), 2))
@@ -659,7 +1051,9 @@ def step_import(d: Path, report) -> None:
         raise UserError(
             f"無法讀取這個音訊檔（{src.suffix}）。wav、mp3、flac、ogg 可直接讀；"
             "m4a/aac 需要先安裝 ffmpeg。") from e
-    write_wav(d / "mix.wav", y)
+    save_stem(d, "mix", y)
+    for f in d.glob("original.*"):   # mix 已經是同一首歌（統一成 44.1 kHz），原始檔不用再留
+        f.unlink(missing_ok=True)
     steps = read_meta(d).get("steps", {})
     steps["import"] = True
     peak = float(np.max(np.abs(y))) if y.size else 0.0
@@ -946,6 +1340,73 @@ def karaoke_model(cfg: dict) -> str:
     return cfg["karaoke_model"]
 
 
+def free_gpu() -> None:
+    """把 PyTorch 暫存的顯示卡記憶體還回去。不還的話，後面的歌詞辨識（CTranslate2）可能記憶體不夠，
+    Windows 會改用很慢的共用記憶體，看起來就像卡在「判斷歌詞語言」。"""
+    import gc
+    gc.collect()
+    if "torch" in sys.modules:
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
+
+
+_AUTOCAST = {"bad": False}
+
+
+FINE_HARMONY = 0.5   # 合音能量達到主唱的一半以上，建議用最精細的方式再分一次
+
+
+def harmony_ratio(d: Path) -> float | None:
+    """主唱有聲音的段落裡，合音和主唱的音量比（0＝幾乎沒有合音，1＝和主唱一樣大聲）。"""
+    lead = read_audio(stem_path(d, "lead"), sr=PITCH_SR, mono=True)
+    back = read_audio(stem_path(d, "back"), sr=PITCH_SR, mono=True)
+    n = min(len(lead), len(back)) // 1600 * 1600
+    if n < 1600 * 10:
+        return None
+    lr = np.sqrt(np.mean(lead[:n].reshape(-1, 1600) ** 2, axis=1))
+    br = np.sqrt(np.mean(back[:n].reshape(-1, 1600) ** 2, axis=1))
+    voiced = lr > max(1e-4, 0.15 * float(np.percentile(lr, 95)))
+    if voiced.sum() < 10:
+        return None
+    return round(float(np.sqrt(np.sum(br[voiced] ** 2) / np.sum(lr[voiced] ** 2))), 3)
+
+
+def fine_job(song_id: str, after=None):
+    """精細處理：用最精細的設定（重疊 4 次）重新分主唱與合音，再重新分析旋律。歌詞、錄音不變。"""
+    def run(report):
+        d = song_dir(song_id)
+        cfg = dict(load_config())
+        cfg["karaoke_overlap"] = 4
+        if cfg.get("karaoke_quality") == "standard":
+            cfg["karaoke_quality"] = "auto"
+        step_separate(d, cfg, report)
+        step_pitch(d, cfg, report)
+        update_meta(d, fine_suggest=False, fine_done=True, fine_queued=False)
+        if after:
+            try:
+                after(song_id)
+            except Exception as e:
+                log_error("fine_job after", e)
+    return run
+
+
+def _autocast_ok() -> bool:
+    """顯示卡支援快速的半精度運算（RTX 20 系列以後）時，高品質分離用混合精度，速度約快一倍、結果幾乎相同。
+    GTX 10 系列以前的顯示卡半精度反而比較慢，維持原本的方式。"""
+    if _AUTOCAST["bad"] or not cuda_ok():
+        return False
+    try:
+        import torch
+        return torch.cuda.get_device_capability(0)[0] >= 7
+    except Exception:
+        return False
+
+
 class _sep_progress:
     """audio-separator 內部用 tqdm 跑每一段，換成會回報進度的版本，畫面上就看得到分離跑到哪裡；
     按停止時 report 會丟出例外，也能在分離到一半時停下來。"""
@@ -1016,15 +1477,19 @@ def separate_uvr(d: Path, cfg: dict, report) -> None:
     shutil.rmtree(tmp, ignore_errors=True)
     tmp.mkdir()
     (MODELS / "uvr").mkdir(parents=True, exist_ok=True)
+    overlap = 4 if cfg.get("karaoke_overlap") == 4 else 2
     sep = Separator(output_dir=str(tmp), model_file_dir=str(MODELS / "uvr"),
-                    output_format="WAV", sample_rate=SR)
+                    output_format="WAV", sample_rate=SR, use_autocast=_autocast_ok(),
+                    # 高品質模型（Roformer）每一段音訊預設重複算 4 次再平均；2 次的結果幾乎一樣，時間約省一半
+                    mdxc_params={"segment_size": 256, "override_model_segment_size": False, "batch_size": None,
+                                 "overlap": overlap, "pitch_shift": 0})
 
     report("準備人聲分離模型", 0.07)
     ensure_model(cfg["separation_model"], _dl_report(report, "人聲分離模型", 0.07))
     report("分離人聲與伴奏", 0.08)
     sep.load_model(model_filename=cfg["separation_model"])
     with _sep_progress("分離人聲與伴奏", report, 0.08, 0.26):
-        outs = _outputs(sep.separate(str(d / "mix.wav")), tmp)
+        outs = _outputs(sep.separate(str(stem_path(d, "mix"))), tmp)
     voc = tmp / "vocals_only.wav"
     _pick(outs, "vocals").replace(voc)
     inst_p = _pick(outs, "instrumental")
@@ -1041,8 +1506,25 @@ def separate_uvr(d: Path, cfg: dict, report) -> None:
         with _sep_progress(label, report, 0.35, 0.18):
             return [p for p in _outputs(sep.separate(str(voc)), tmp) if p != voc and p != inst_p]
     try:
-        sep.load_model(model_filename=kara)
-        outs2 = run_kara(label)
+        try:
+            sep.load_model(model_filename=kara)
+            outs2 = run_kara(label)
+        except JobCancelled:
+            raise
+        except Exception as e:
+            if not (hq and sep.use_autocast):
+                raise
+            # 混合精度在這張顯示卡上出問題：之後都改用一般精度，這首重新分一次
+            _AUTOCAST["bad"] = True
+            log_error("autocast separation", e)
+            sep = Separator(output_dir=str(tmp), model_file_dir=str(MODELS / "uvr"),
+                            output_format="WAV", sample_rate=SR, use_autocast=False,
+                            mdxc_params={"segment_size": 256, "override_model_segment_size": False,
+                                         "batch_size": None, "overlap": overlap, "pitch_shift": 0})
+            sep.load_model(model_filename=kara)
+            outs2 = run_kara(label)
+    except JobCancelled:
+        raise
     except Exception as e:
         if not hq:
             raise
@@ -1059,10 +1541,20 @@ def separate_uvr(d: Path, cfg: dict, report) -> None:
     lead_p = _pick(outs2, "vocals")
     back_p = _pick(outs2, "instrumental")
 
-    n = sf.info(str(d / "mix.wav")).frames
+    n = sf.info(str(stem_path(d, "mix"))).frames
     for name, p in (("lead", lead_p), ("back", back_p), ("inst", inst_p)):
-        write_wav(d / f"{name}.wav", fit_length(read_audio(p), n))
+        save_stem(d, name, fit_length(read_audio(p), n))
     shutil.rmtree(tmp, ignore_errors=True)
+    del sep
+    free_gpu()
+    # 合音比重：合音越多，主唱和合音越難分乾淨，更精細的分離越有幫助
+    try:
+        h = harmony_ratio(d)
+        used_hq = kara == HQ_KARAOKE
+        update_meta(d, harmony=h, sep_overlap=overlap if used_hq else None,
+                    fine_suggest=bool(used_hq and overlap < 4 and h is not None and h >= FINE_HARMONY))
+    except Exception as e:
+        log_error("harmony ratio", e)
 
 
 def separate_dsp(d: Path, report) -> None:
@@ -1071,7 +1563,7 @@ def separate_dsp(d: Path, report) -> None:
     from scipy.ndimage import uniform_filter1d
 
     report("以聲像位置分離（備援模式）", 0.1)
-    mix = read_audio(d / "mix.wav")
+    mix = read_audio(stem_path(d, "mix"))
     n = mix.shape[1]
     N, H = 2048, 512
     L = librosa.stft(mix[0], n_fft=N, hop_length=H)
@@ -1095,16 +1587,16 @@ def separate_dsp(d: Path, report) -> None:
     br = librosa.istft(mb * R, hop_length=H, length=n)
     back = np.stack([bl, br])
     inst = mix - lead[None, :] - back
-    write_wav(d / "lead.wav", np.stack([lead, lead]))
-    write_wav(d / "back.wav", back)
-    write_wav(d / "inst.wav", inst)
+    save_stem(d, "lead", np.stack([lead, lead]))
+    save_stem(d, "back", back)
+    save_stem(d, "inst", inst)
 
 
 def is_acapella(d: Path) -> bool:
     """伴奏軌幾乎沒有聲音 → 原曲本來就是清唱／純人聲。"""
     try:
         def rms(name):
-            y, _ = sf.read(str(d / f"{name}.wav"), dtype="float32", always_2d=True)
+            y, _ = sf.read(str(stem_path(d, name)), dtype="float32", always_2d=True)
             return float(np.sqrt(np.mean(y ** 2)) + 1e-9)
         lead, inst = rms("lead"), rms("inst")
         return inst / lead < 0.12
@@ -1417,7 +1909,7 @@ PITCH_ALGO = 2   # 1.4.2：旋律分析改良（補斷點、修八度）；舊�
 
 def step_pitch(d: Path, cfg: dict, report) -> None:
     report("分析主唱旋律", 0.55)
-    y16 = read_audio(d / "lead.wav", sr=PITCH_SR, mono=True)
+    y16 = read_audio(stem_path(d, "lead"), sr=PITCH_SR, mono=True)
     midi = track_pitch(y16, cfg)
     notes = segment_notes(midi)
     data = {
@@ -1426,6 +1918,7 @@ def step_pitch(d: Path, cfg: dict, report) -> None:
         "notes": notes,
     }
     (d / "pitch.json").write_text(json.dumps(data, separators=(",", ":")), "utf-8")
+    free_gpu()
     meta = read_meta(d)
     meta["steps"]["pitch"] = True
     meta["pitch_algo"] = PITCH_ALGO
@@ -1531,6 +2024,26 @@ def _collect_words(segs, dur: float, report, stats: list | None = None) -> list:
 LANG_NAMES = {"zh": "中文", "ja": "日文", "en": "英文", "ko": "韓文", "yue": "粵語"}
 
 
+def _sung_windows(y16: np.ndarray, n: int = 3, win: float = 30.0) -> np.ndarray:
+    """主唱聲音最多的幾段（每段 30 秒）接起來，用來判斷語言。
+    以前先對整首歌跑一次語音偵測（VAD）再判斷，比較慢；主唱軌本來就只有人聲，直接挑最大聲的段落即可。"""
+    sr = PITCH_SR
+    W = int(win * sr)
+    if len(y16) <= W:
+        return y16.astype(np.float32)
+    hop = sr // 2
+    e = np.array([float(np.sqrt(np.mean(y16[i:i + hop] ** 2))) for i in range(0, len(y16) - hop + 1, hop)])
+    k = W // hop
+    sums = np.convolve((e > max(1e-4, np.median(e) * 0.5)).astype(np.float32) * e, np.ones(k), "valid")
+    picks: list[int] = []
+    for i in np.argsort(-sums):
+        if all(abs(int(i) - j) >= k for j in picks):
+            picks.append(int(i))
+        if len(picks) >= n:
+            break
+    return np.concatenate([y16[j * hop:j * hop + W] for j in sorted(picks)]).astype(np.float32)
+
+
 def pick_language(model, y16: np.ndarray, want: str, per_song: bool) -> tuple[str | None, str]:
     """決定辨識語言。回傳 (語言, 說明)。
 
@@ -1538,12 +2051,13 @@ def pick_language(model, y16: np.ndarray, want: str, per_song: bool) -> tuple[st
     （例如日文歌），改用偵測到的語言，避免把日文硬辨識成中文。設定是自動時直接用偵測結果。"""
     if per_song and want:
         return want, ""
+    t0 = time.time()
     try:
-        det, prob, _ = model.detect_language(y16, vad_filter=True, language_detection_segments=4)
+        det, prob, _ = model.detect_language(_sung_windows(y16), vad_filter=False, language_detection_segments=3)
     except Exception:
         traceback.print_exc()
         return (want or None), ""
-    print(f"[lyrics] 偵測語言 {det} {prob:.2f}（設定 {want or '自動'}）", flush=True)
+    print(f"[lyrics] 偵測語言 {det} {prob:.2f}（設定 {want or '自動'}，{time.time() - t0:.1f} 秒）", flush=True)
     if want and det != want and prob >= 0.7:
         return det, f"偵測到這首是{LANG_NAMES.get(det, det)}歌，改用{LANG_NAMES.get(det, det)}辨識"
     if want:
@@ -1592,8 +2106,9 @@ def step_lyrics(d: Path, cfg: dict, report) -> None:
     if not module_status()["whisper"]:
         raise UserError("沒有安裝 faster-whisper，無法辨識歌詞")
     report("載入語音辨識模型（第一次會下載）", 0.7)
+    free_gpu()
     model = _whisper_model(cfg)
-    y16 = read_audio(d / "lead.wav", sr=PITCH_SR, mono=True)
+    y16 = read_audio(stem_path(d, "lead"), sr=PITCH_SR, mono=True)
     report("判斷歌詞語言", 0.74)
     meta0 = read_meta(d)
     song_lang = meta0.get("lyrics_language")          # 這首歌個別指定的語言（None＝依設定）
@@ -1754,7 +2269,7 @@ def step_variant(d: Path, key: int, speed: float, report) -> None:
     vd.mkdir(exist_ok=True)
     for old in d.glob("v_k*"):   # 1.3 以前產生的版本（時間會漂移），用不到了
         shutil.rmtree(old, ignore_errors=True)
-    todo = [s for s in STEMS if not (vd / f"{s}.wav").exists()]
+    todo = [s for s in STEMS if not stem_path(vd, s).exists()]
     if not todo:
         return
     label = f"移調 {key:+d}、速度 {int(speed * 100)}%"
@@ -1762,7 +2277,7 @@ def step_variant(d: Path, key: int, speed: float, report) -> None:
     report(f"{label}：讀取音軌", 0.02)
     data = {}
     for stem in todo:
-        y, sr = sf.read(str(d / f"{stem}.wav"), dtype="float32", always_2d=True)
+        y, sr = sf.read(str(stem_path(d, stem)), dtype="float32", always_2d=True)
         y = np.ascontiguousarray(y.T)
         data[stem] = (y, sr, shift_parts(y.shape[1], sr, cpus))
     total = sum(len(v[2]) for v in data.values())
@@ -1782,14 +2297,13 @@ def step_variant(d: Path, key: int, speed: float, report) -> None:
         ex.shutdown(wait=True, cancel_futures=True)   # 取消時，還沒開始的段落直接丟掉
     for stem, (y, sr, parts) in data.items():
         out = join_pieces(results[stem], parts, y.shape[1], sr, speed)
-        write_wav(vd / f"{stem}.tmp.wav", out, sr)
-        (vd / f"{stem}.tmp.wav").replace(vd / f"{stem}.wav")
+        save_stem(vd, stem, out, sr)
     report(f"{label}：完成", 1.0)
 
 
 def variant_ready(d: Path, key: int, speed: float) -> bool:
     vd = variant_dir(d, key, speed)
-    return all((vd / f"{s}.wav").exists() for s in STEMS)
+    return all(stem_path(vd, s).exists() for s in STEMS)
 
 
 # ---------------------------------------------------------------- 錄音評分
@@ -2121,6 +2635,18 @@ class Jobs:
             self.pending[a], self.pending[b] = self.pending[b], self.pending[a]
             return True
 
+    def upcoming(self, label: str, n: int) -> list[str]:
+        """排在最前面、還沒開始的 n 個工作的歌曲編號（只看指定種類）。"""
+        with self.lock:
+            out = []
+            for j, _ in self.pending:
+                st = self.state[j]
+                if st["status"] == "queued" and st["label"] == label and not st.get("cancel"):
+                    out.append(st["song"])
+                    if len(out) >= n:
+                        break
+            return out
+
     def order(self) -> dict[str, int]:
         with self.lock:
             ids = [j for j, _ in self.pending if self.state[j]["status"] == "queued"]
@@ -2248,14 +2774,29 @@ def process_song(song_id: str, steps: list[str]):
                 meta["notes"] = [x for x in meta.get("notes", []) if "歌詞" not in x] + [
                     f"歌詞辨識沒有完成：{e}。可以在練唱畫面貼上歌詞。"]
                 write_meta(d, meta)
-            report("搜尋線上歌詞並與辨識結果比對", 0.95)
-            try:
-                find_and_store_candidates(d, cfg, check=lambda: report("搜尋線上歌詞並與辨識結果比對", 0.95))
-            except JobCancelled:
-                raise
-            except Exception:
-                traceback.print_exc()   # 沒有網路或網站不通時，維持辨識結果
+            # 線上歌詞搜尋要等網站回應（網站忙的時候可能要幾十秒），改在背景做，不卡住下一首歌的處理
+            report("排入線上歌詞搜尋（背景進行）", 0.97)
+            search_lyrics_later(d, cfg)
     return run
+
+
+_LYRICS_POOL = None
+
+
+def search_lyrics_later(d: Path, cfg: dict) -> None:
+    """在背景依序搜尋線上歌詞（一次一首），結果出來後歌曲庫會標「有線上歌詞可選」。"""
+    global _LYRICS_POOL
+    from concurrent.futures import ThreadPoolExecutor
+    if _LYRICS_POOL is None:
+        _LYRICS_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="lyrics-search")
+
+    def run():
+        try:
+            if d.exists():
+                find_and_store_candidates(d, cfg)
+        except Exception:
+            traceback.print_exc()   # 沒有網路或網站不通時，維持辨識結果
+    _LYRICS_POOL.submit(run)
 
 
 # 啟動時就把 ffmpeg 放進 PATH：AI 分離（audio-separator）與 m4a/mp3 讀取都需要
@@ -2347,7 +2888,7 @@ def similarity(recognized: str, candidate: str) -> float | None:
     return round(sum(x.size for x in m.get_matching_blocks()) / len(a), 3)
 
 
-USER_AGENT = "LeihuLiantai/1.5.1 (+https://github.com/LeihuTW/Leihu-singsing)"   # HTTP 標頭只能用英文字
+USER_AGENT = "LeihuLiantai/1.6.1 (+https://github.com/LeihuTW/Leihu-singsing)"   # HTTP 標頭只能用英文字
 
 
 def _http_json(url: str, headers: dict | None = None, timeout: int = 8):

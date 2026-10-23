@@ -122,7 +122,7 @@ def _update(bid, index, **values):
         save(batch)
 
 
-def _enqueue(batch, index, jobs):
+def _enqueue(batch, index, jobs, after=None):
     row = batch['items'][index]
     sid = row.get('song_id')
     if not sid or not (P.LIB / sid).is_dir():
@@ -137,11 +137,16 @@ def _enqueue(batch, index, jobs):
         try:
             d = P.song_dir(sid)
             steps = P.read_meta(d).get('steps', {})
-            if steps.get('import') and (d / 'original.wav').is_file():
+            if steps.get('import') and ((d / 'original.wav').is_file() or P.stem_path(d, 'mix').is_file()):
                 remaining = [step for step in ('separate', 'pitch', 'lyrics') if not steps.get(step)]
                 P.process_song(sid, remaining)(report)
             else:
                 P.youtube_job(sid, url)(report)
+            if P.read_meta(d).get('dl_state') == 'paused':
+                _update(bid, index, status='paused', error='YouTube 暫時限制下載，解除限制後可重試。')
+                return
+            if after:
+                after(sid)
             _update(bid, index, status='done')
         except Exception as error:
             _update(bid, index, status='error', error=str(error))
@@ -149,7 +154,7 @@ def _enqueue(batch, index, jobs):
     row['job'] = jobs.submit('playlist', sid, run, label='playlist:' + bid)
 
 
-def create(items, category, jobs):
+def create(items, category, jobs, after=None):
     if not isinstance(items, list) or not 1 <= len(items) <= LIMIT:
         raise P.UserError('請勾選 1–200 首影片。')
     selected, seen = [], set()
@@ -177,7 +182,7 @@ def create(items, category, jobs):
                 if old['id'] in active or all(steps.get(s) for s in ('import', 'separate', 'pitch')):
                     row.update(status='skipped', error='歌曲已存在或正在處理，未重複下載。')
                     continue
-            _enqueue(batch, index, jobs)
+            _enqueue(batch, index, jobs, after)
         save(batch)
         return batch
 
@@ -194,12 +199,12 @@ def stop(bid, jobs):
         return batch
 
 
-def retry(bid, jobs):
+def retry(bid, jobs, after=None):
     with _lock:
         batch = status(bid, jobs)
         active = {job['song'] for job in jobs.active() if job['status'] in ('queued', 'running')}
         for index, row in enumerate(batch['items']):
-            if row['status'] in ('error', 'interrupted', 'cancelled') and row.get('song_id') not in active:
-                _enqueue(batch, index, jobs)
+            if row['status'] in ('error', 'interrupted', 'cancelled', 'paused') and row.get('song_id') not in active:
+                _enqueue(batch, index, jobs, after)
         save(batch)
         return batch

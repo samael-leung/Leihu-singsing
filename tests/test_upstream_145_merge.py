@@ -98,7 +98,7 @@ class UpstreamMergeTests(unittest.TestCase):
         self.assertEqual(loaded[-1], P.DEFAULT_CONFIG['karaoke_model'])
         self.assertEqual(P.read_meta(self.song)['karaoke'], P.DEFAULT_CONFIG['karaoke_model'])
         for stem in P.STEMS:
-            self.assertEqual(sf.info(str(self.song / f'{stem}.wav')).frames, P.SR)
+            self.assertEqual(sf.info(str(P.stem_path(self.song, stem))).frames, P.SR)
 
     def test_cancel_api_stops_running_job_at_checkpoint_and_never_runs_queued_job(self):
         jobs = P.Jobs()

@@ -328,7 +328,8 @@ def _wheel_links(tag: str) -> list[tuple[str, str, str]]:
         index = f"https://download.pytorch.org/whl/{tag}/{name}/"
         html = urllib.request.urlopen(urllib.request.Request(index, headers={"User-Agent": "LeihuLiantai-installer"}),
                                       timeout=60).read().decode("utf-8", "replace")
-        fname = f"{name}-{ver}%2B{tag}-cp311-cp311-win_amd64.whl"
+        abi = f"cp{sys.version_info.major}{sys.version_info.minor}"
+        fname = f"{name}-{ver}%2B{tag}-{abi}-{abi}-win_amd64.whl"
         m = re.search(r'href="([^"]*' + re.escape(fname) + r')(?:#sha256=([0-9a-f]{64}))?"', html)
         if not m:
             raise RuntimeError(f"清單裡找不到 {fname}")
