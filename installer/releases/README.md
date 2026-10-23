@@ -1,3 +1,28 @@
+# 整合版 1.6.2 — 上游 1.6.1 與安全更新指令
+
+只發佈到 `leihu-song-request-sync` 分支。
+
+- **已有 Windows AI 選擇版 1.4.4～1.6.1：[程式更新檔 Update.exe](./LeihuLiantai-windows-ai-choice-1.6.2-Update.exe)**
+- [首次安裝／修復用 Setup.exe](./LeihuLiantai-windows-ai-choice-1.6.2-Setup.exe)
+- [完整移除工具](./LeihuLiantai-windows-ai-choice-1.6.2-CleanUninstall.exe)
+- **[Node.js／Python／憑證事件的 PowerShell 安全更新指令](../../SECURITY_UPDATE_2026-10.md)**
+
+合併原作者 `LeihuTW/Leihu-singsing` 的 1.6.1（`556d6189498c96df7510e2ebaf55bfbc9be7a64e`），包含遠端開歌與 KEY、繁簡搜尋、歌手／曲名／KEY 表單、排序與分組、FLAC 儲存與容量整理、預先下載、背景歌詞搜尋與精細處理。保留所有既有 AI 選擇、日文標音、雙向點歌同步、模糊歌名比對與永久配對，以及播放清單批次匯入、停止／重試及音訊強制對齊。
+
+本次修正自訂強制對齊支援 FLAC、播放清單重試可沿用已匯入的 FLAC，並保留 YouTube 暫停狀態及上游處理完成後的預設 KEY／精細處理行為。
+
+先儲存錄音並關閉程式，執行 Update.exe 選原安裝資料夾。更新包保留歌曲、錄音、模型、設定與 song-request-links.json；不需要 ngrok。**Update.exe 不會更新既有 Python 核心或套件，請另外執行安全說明中的指令。** requirements 已更新至 Pillow 13.0.0、certifi >=2026.10.19。
+
+安全說明列出 Node.js 24.22.1、pip >=26.2.2、certifi >=2026.10.19 的確認來源。舊內嵌 Python 3.11.9 不會因為更新系統 Python 而改變；setup/repair-runtime.ps1 可用已安裝的修補版 Python 3.13.17+ 建立 secure-runtime、重裝相符套件並建立新捷徑，保留原 Python 與使用者資料。一般 Setup 的舊 bootstrap 仍是 3.11.9，不能視為已修補核心。遷移腳本與 Windows 安裝 GUI 未在 Linux 雲端實機執行；winget 是否已同步該 Python 版本也未驗證，腳本會檢查最低版本。
+
+來源：`0f9962dbec04c8af0666ad71eb93c3f4f3ddd352`，NSIS 3.11。116 項 Python 測試、11 項同步 JavaScript 測試通過，另有 3 項 Python 測試依 AI 模式跳過，真實 CTC 模型推論未執行。設定、直播歌詞、USB 麥克風時脈 smoke 及實際 Flask／Node／Chromium 的雙向同步、日文標音、字體與配對恢復驗證通過。新增 FLAC 壓縮／播放／對齊、播放清單重試、遠端 API、繁簡搜尋及 Python ABI 選 wheel 的回歸測試。
+
+點歌系統升級 googleapis 188.0.0 的隔離副本通過 7 項測試，npm audit 回報 0 項；其原分支沒有更動。雲端測試環境在更新 pip／certifi／Pillow 後 pip-audit 回報 0 項，這不涵蓋未安裝的完整 Windows／GPU／ML 套件或 Python 核心。實際 GPU／模型推論及 Windows 執行環境遷移尚需實機驗證。
+
+更新包的 27 個程式／字體／安全說明檔與來源逐一比對一致，不包含執行環境、模型或使用者資料；封裝及 SHA-256 見 [SHA256SUMS](./SHA256SUMS)。安裝檔未簽章。
+
+---
+
 # 整合版 1.5.2 — 合併原作者 1.5.1
 
 此版本只發佈到 `leihu-song-request-sync` 分支。
