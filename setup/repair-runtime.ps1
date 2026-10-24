@@ -17,7 +17,7 @@ if ($LASTEXITCODE -ne 0) { throw "Could not prepare the separate Python environm
 $python = Join-Path $runtime "Scripts\python.exe"
 & $python -c "import sys; assert sys.version_info >= (3,13,17); print(sys.version)"
 if ($LASTEXITCODE -ne 0) { throw "The new environment does not use the patched Python." }
-& $python -m pip install --upgrade "pip>=26.2.2" "certifi>=2026.10.19" "pillow==13.0.0"
+& $python -m pip install --upgrade "pip>=26.2.2" "certifi>=2026.10.23" "pillow==13.0.0"
 if ($LASTEXITCODE -ne 0) { throw "Security package installation failed." }
 $installed = Join-Path $AppDir "installed.json"
 $previous = if (Test-Path $installed) { [IO.File]::ReadAllBytes($installed) } else { $null }

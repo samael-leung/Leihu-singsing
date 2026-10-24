@@ -165,17 +165,18 @@ def run(d, text, language, original_revision, report):
             result = json.loads(result_file.read_text('utf-8'))
             if result.get('error'):
                 raise P.UserError(result['error'])
-            if revision(d) != original_revision:
-                raise P.UserError('對齊期間歌詞已被修改，沒有覆蓋較新的歌詞；請重試。')
-            lrc = enhanced_lrc(result['lines'])
-            target = d / 'lyrics.lrc'
-            staged = Path(temporary) / 'lyrics.lrc'
-            staged.write_text(lrc, 'utf-8'); staged.replace(target)
-            meta = P.read_meta(d)
-            meta.setdefault('steps', {})['lyrics'] = True
-            meta['lyrics_source'] = 'forced_alignment'
-            meta['alignment_model'] = MODELS[language]
-            P.write_meta(d, meta)
+            with P._META_LOCK:
+                if revision(d) != original_revision:
+                    raise P.UserError('對齊期間歌詞已被修改，沒有覆蓋較新的歌詞；請重試。')
+                lrc = enhanced_lrc(result['lines'])
+                target = d / 'lyrics.lrc'
+                staged = Path(temporary) / 'lyrics.lrc'
+                staged.write_text(lrc, 'utf-8'); staged.replace(target)
+                meta = P.read_meta(d)
+                meta.setdefault('steps', {})['lyrics'] = True
+                meta['lyrics_source'] = 'forced_alignment'
+                meta['alignment_model'] = MODELS[language]
+                P.write_meta(d, meta)
             report('音訊強制對齊完成，逐字時間已儲存', 1)
         finally:
             if process.poll() is None:

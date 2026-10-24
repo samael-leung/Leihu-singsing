@@ -38,7 +38,7 @@ def record(model, tin, tout, purpose, song, active_provider=None):
     with _lock:
         data = _load()
         data['calls'] = (data['calls'] + [entry])[-2000:]
-        USAGE_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=1), 'utf-8')
+        P.atomic_write_text(USAGE_PATH, json.dumps(data, ensure_ascii=False, indent=1))
     return entry
 
 

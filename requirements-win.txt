@@ -27,4 +27,4 @@ sudachipy==0.7.0
 sudachidict_small==20261015
 
 # Security: remove compromised emSign CA certificates
-certifi>=2026.10.19
+certifi>=2026.10.23

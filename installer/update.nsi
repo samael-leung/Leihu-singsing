@@ -19,7 +19,7 @@ VIAddVersionKey /LANG=1028 "FileDescription" "雷虎練唱台 ${VERSION} 程式�
 VIAddVersionKey /LANG=1028 "FileVersion" "${VERSION}"
 VIAddVersionKey /LANG=1028 "LegalCopyright" "© 2026 雷虎肯茲 (Leihustore)"
 !define MUI_WELCOMEPAGE_TITLE "更新雷虎練唱台至 ${VERSION}"
-!define MUI_WELCOMEPAGE_TEXT "適用已安裝的 Windows AI 選擇版 1.4.4～1.6.2。$\r$\n$\r$\n請先儲存錄音並關閉練唱台。這個更新只覆蓋程式檔，不下載或安裝 Python、套件、模型或其他軟體。歌曲庫、錄音、API 金鑰與設定會保留。$\r$\n$\r$\n請選擇原本的安裝資料夾。首次安裝請使用 Setup.exe。$\r$\n$\r$\n首次使用日文標音時，程式可能自動下載約 45 MB 的字典套件。"
+!define MUI_WELCOMEPAGE_TEXT "適用已安裝的 Windows AI 選擇版 1.4.4～1.6.5。$\r$\n$\r$\n請先儲存錄音並關閉練唱台。這個更新只覆蓋程式檔，不下載或安裝 Python、套件、模型或其他軟體。歌曲庫、錄音、API 金鑰與設定會保留。$\r$\n$\r$\n請選擇原本的安裝資料夾。首次安裝請使用 Setup.exe。$\r$\n$\r$\n首次使用日文標音時，程式可能自動下載約 45 MB 的字典套件。"
 !define MUI_FINISHPAGE_RUN
 !define MUI_FINISHPAGE_RUN_FUNCTION LaunchUpdated
 !define MUI_FINISHPAGE_RUN_TEXT "開啟雷虎練唱台"
@@ -66,6 +66,9 @@ Section "Update"
   ${AndIf} $1 != "1.6.0"
   ${AndIf} $1 != "1.6.1"
   ${AndIf} $1 != "1.6.2"
+  ${AndIf} $1 != "1.6.3"
+  ${AndIf} $1 != "1.6.4"
+  ${AndIf} $1 != "1.6.5"
     Goto unsupported
   ${EndIf}
   StrCpy $2 "$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe"
@@ -80,7 +83,7 @@ Section "Update"
   WriteRegStr HKCU "${REGKEY}" "DisplayVersion" "${VERSION}"
   Goto done
 unsupported:
-  MessageBox MB_ICONSTOP "程式更新僅適用 Windows AI 選擇版 1.4.4～1.6.2。其他版本請使用 Setup.exe 的更新選項。"
+  MessageBox MB_ICONSTOP "程式更新僅適用 Windows AI 選擇版 1.4.4～1.6.5。其他版本請使用 Setup.exe 的更新選項。"
   Abort
 done:
 SectionEnd

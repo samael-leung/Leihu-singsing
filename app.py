@@ -5,6 +5,7 @@ import json
 import math
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -23,11 +24,24 @@ import pipeline as P
 import share as SH
 import song_request
 
-VERSION = "1.6.2"
+VERSION = "1.6.5"
 HOST, PORT = "127.0.0.1", int(os.environ.get("LIANTAI_PORT", "8765"))
 app = Flask(__name__, static_folder=str(P.ROOT / "static"), static_url_path="/static")
 app.config["MAX_CONTENT_LENGTH"] = 1024 * 1024 * 1024
 song_request.register(app, list_songs=P.list_songs)
+_SETTINGS_LOCK = threading.Lock()   # 設定檔、分類清單：讀出→修改→存回 之間不讓別的請求插進來
+
+
+def _locked(fn):
+    import functools
+
+    @functools.wraps(fn)
+    def wrap(*a, **k):
+        with _SETTINGS_LOCK:
+            return fn(*a, **k)
+    return wrap
+
+
 jobs = P.Jobs()
 vjobs = P.Jobs()   # 移調／變速另外排隊：不會被分軌、評分卡住，也不會卡住它們
 
@@ -54,7 +68,23 @@ def status():
                    hq_model=P.HQ_KARAOKE,
                    ai_ready=C.ready(), ai_provider=C.provider(),
                    session_cost=C.summary()["session"]["cost_usd"],
-                   jobs=jobs.active() + vjobs.active(), remote=dict(REMOTE), yt_pause=dict(P.YT_PAUSE))
+                   remote=dict(REMOTE), yt_pause=dict(P.YT_PAUSE), **_jobs_for_ui())
+
+
+UI_QUEUE_SHOWN = 30
+
+
+def _jobs_for_ui() -> dict:
+    """畫面每秒會問一次進度。排隊的歌有好幾百首時，只送前 30 首（其餘只給數量），
+    不然每秒都要傳、畫面也要重畫幾百列，介面會變得很卡。"""
+    out, queued = [], 0
+    for j in jobs.active() + vjobs.active():
+        if j["status"] == "queued" and j["kind"] in ("process", "playlist"):
+            queued += 1
+            if queued > UI_QUEUE_SHOWN:
+                continue
+        out.append(j)
+    return {"jobs": out, "queued_total": queued}
 
 
 @app.post("/api/youtube/resume")
@@ -109,6 +139,7 @@ def get_config():
 
 
 @app.post("/api/config")
+@_locked
 def set_config():
     body = request.get_json(force=True) or {}
     cfg = P.load_config()
@@ -213,7 +244,10 @@ def add_song():
 
     def run(report, sid=sid):
         proc(report)
-        after_process(sid)
+        try:
+            after_process(sid)
+        except Exception as e:   # 移調預跑等後續工作失敗，不影響這首歌已經處理好
+            P.log_error("after_process", e)
     jid = jobs.submit("process", sid, run, label="all")
     return jsonify(id=sid, job=jid)
 
@@ -338,9 +372,10 @@ def apply_sheet(sid: str, info: dict, batch_cat: str | None = None) -> None:
         ch["lyrics_language"] = info["lang"]
     cat = batch_cat or (info.get("category") if not meta.get("category") else None)
     if cat:
-        cats = P.load_categories()
-        if cat not in cats:
-            P.save_categories(cats + [cat])
+        with _SETTINGS_LOCK:
+            cats = P.load_categories()
+            if cat not in cats:
+                P.save_categories(cats + [cat])
         ch["category"] = cat
     if ch:
         P.update_meta(d, **ch)
@@ -571,7 +606,7 @@ def get_lyrics(sid):
         if P.is_japanese(t):   # 1.5 以前把日文歌詞轉成了台灣繁體（来→來）：改回日文字形並存回去
             j = P.tw_to_ja(t)
             if j != t:
-                (d / n).write_text(j, "utf-8")
+                P.atomic_write_text(d / n, j)
                 t = j
         return t
     meta = P.read_meta(d)
@@ -608,14 +643,15 @@ def set_kana(sid):
     if not base:
         raise P.UserError("缺少要修改的字")
     d = P.song_dir(sid)
-    meta = P.read_meta(d)
-    fix = meta.get("kana_fix") or {}
-    if reading:
-        fix[base] = reading
-    else:
-        fix.pop(base, None)
-    meta["kana_fix"] = fix
-    P.write_meta(d, meta)
+    with P._META_LOCK:   # 讀出到寫回之間不讓別的執行緒改這首歌的資料
+        meta = P.read_meta(d)
+        fix = meta.get("kana_fix") or {}
+        if reading:
+            fix[base] = reading
+        else:
+            fix.pop(base, None)
+        meta["kana_fix"] = fix
+        P.write_meta(d, meta)
     return jsonify(kana_fix=fix)
 
 
@@ -628,12 +664,13 @@ def use_lyrics(sid):
     if not src or not (d / src).exists():
         raise P.UserError("沒有這份歌詞")
     lrc = (d / src).read_text("utf-8")
-    (d / "lyrics.lrc").write_text(lrc, "utf-8")
-    meta = P.read_meta(d)
-    meta["lyrics_source"] = "online" if which == "online" else "whisper"
-    meta["lyrics_pending"] = False
-    meta["steps"]["lyrics"] = True
-    P.write_meta(d, meta)
+    P.atomic_write_text(d / "lyrics.lrc", lrc)
+    with P._META_LOCK:   # 讀出到寫回之間不讓別的執行緒改這首歌的資料
+        meta = P.read_meta(d)
+        meta["lyrics_source"] = "online" if which == "online" else "whisper"
+        meta["lyrics_pending"] = False
+        meta["steps"]["lyrics"] = True
+        P.write_meta(d, meta)
     return jsonify(lrc=lrc, source=meta["lyrics_source"])
 
 
@@ -641,16 +678,17 @@ def use_lyrics(sid):
 def put_lyrics(sid):
     d = P.song_dir(sid)
     lrc = (request.get_json(force=True) or {}).get("lrc", "")
-    (d / "lyrics.lrc").write_text(lrc, "utf-8")
-    meta = P.read_meta(d)
-    meta["steps"]["lyrics"] = bool(lrc.strip())
-    if meta.get("lyrics_source") == "online" and lrc.strip():
-        (d / "lyrics_online.lrc").write_text(lrc, "utf-8")   # 調整線上歌詞的時間：存回線上歌詞那一份
-    else:
-        meta["lyrics_source"] = "manual"
-    if lrc.strip():
-        meta["notes"] = [x for x in meta.get("notes", []) if "歌詞辨識沒有完成" not in x]
-    P.write_meta(d, meta)
+    P.atomic_write_text(d / "lyrics.lrc", lrc)
+    with P._META_LOCK:   # 讀出到寫回之間不讓別的執行緒改這首歌的資料
+        meta = P.read_meta(d)
+        meta["steps"]["lyrics"] = bool(lrc.strip())
+        if meta.get("lyrics_source") == "online" and lrc.strip():
+            P.atomic_write_text(d / "lyrics_online.lrc", lrc)   # 調整線上歌詞的時間：存回線上歌詞那一份
+        else:
+            meta["lyrics_source"] = "manual"
+        if lrc.strip():
+            meta["notes"] = [x for x in meta.get("notes", []) if "歌詞辨識沒有完成" not in x]
+        P.write_meta(d, meta)
     return jsonify(ok=True)
 
 
@@ -799,7 +837,7 @@ def add_take(sid):
         "speed": float(request.form.get("speed", 1)),
         "duration": float(request.form.get("duration", 0)),
     }
-    (td / f"{tid}.json").write_text(json.dumps(info, ensure_ascii=False), "utf-8")
+    P.atomic_write_text(td / f"{tid}.json", json.dumps(info, ensure_ascii=False))
     jid = jobs.submit("take", sid, lambda report: _score(d, tid, report), label=tid)
     return jsonify(id=tid, job=jid)
 
@@ -813,7 +851,7 @@ def _score(d, tid, report):
         try:
             info = json.loads(j.read_text("utf-8"))
             info.update(status="error", error=f"評分失敗：{e}")
-            j.write_text(json.dumps(info, ensure_ascii=False), "utf-8")
+            P.atomic_write_text(j, json.dumps(info, ensure_ascii=False))
         except Exception:
             pass
         raise
@@ -1064,10 +1102,9 @@ def ai_align(sid):
     if any(b <= a for a, b in zip(clean, clean[1:])):
         raise P.UserError("AI 回傳的歌詞時間沒有遞增，請再試一次。")
     lrc = P.to_lrc([{"t": t, "text": txt} for t, txt in zip(clean, ref_lines)])
-    (d / "lyrics.lrc").write_text(lrc, "utf-8")
-    meta["steps"]["lyrics"] = True
-    meta["lyrics_source"] = usage.get("provider", C.provider())
-    P.write_meta(d, meta)
+    P.atomic_write_text(d / "lyrics.lrc", lrc)
+    steps = dict(P.read_meta(d).get("steps") or {}, lyrics=True)
+    P.update_meta(d, steps=steps, lyrics_source=usage.get("provider", C.provider()))   # Claude 回應要等一陣子，不能整段鎖住
     return jsonify(lrc=lrc, usage=usage)
 
 
@@ -1096,7 +1133,7 @@ def ai_coach(sid):
     )
     text, usage = C.ask_text(prompt, 3000, "coach", title)
     t["coach"] = text
-    j.write_text(json.dumps(t, ensure_ascii=False), "utf-8")
+    P.atomic_write_text(j, json.dumps(t, ensure_ascii=False))
     return jsonify(text=text, usage=usage)
 
 
@@ -1160,6 +1197,7 @@ def categories():
 
 
 @app.post("/api/categories")
+@_locked
 def edit_categories():
     body = request.get_json(force=True) or {}
     act, name, new = body.get("action"), (body.get("name") or "").strip(), (body.get("new") or "").strip()
@@ -1306,6 +1344,41 @@ def open_overlay():
         raise P.UserError("網址格式不正確")
     webbrowser.open(f"http://{HOST}:{PORT}/overlay?{q}")
     return jsonify(ok=True)
+
+
+def _app_browser() -> str | None:
+    """找 Edge 或 Chrome（Windows 內建 Edge，通常一定找得到）。"""
+    if sys.platform != "win32":
+        return None
+    for env, rel in (("ProgramFiles(x86)", r"Microsoft\Edge\Application\msedge.exe"),
+                     ("ProgramFiles", r"Microsoft\Edge\Application\msedge.exe"),
+                     ("ProgramFiles", r"Google\Chrome\Application\chrome.exe"),
+                     ("ProgramFiles(x86)", r"Google\Chrome\Application\chrome.exe"),
+                     ("LOCALAPPDATA", r"Google\Chrome\Application\chrome.exe")):
+        base = os.environ.get(env)
+        if base and (Path(base) / rel).is_file():
+            return str(Path(base) / rel)
+    return None
+
+
+@app.post("/api/open-app")
+def open_app():
+    """開一個獨立的練唱台視窗（Edge 應用程式模式，沒有網址列）。
+    桌面版視窗的聲音由 WebView2 的背景程式播出，Discord「分享應用程式」抓不到；
+    這個視窗是一般瀏覽器程式，分享它時畫面和音樂會一起送出。
+    用獨立的設定資料夾，所以是自己一個程式，不會混到其他分頁的聲音。"""
+    url = f"http://{HOST}:{PORT}/"
+    exe = _app_browser()
+    if exe:
+        prof = P.ROOT / ".appwin"
+        prof.mkdir(exist_ok=True)
+        subprocess.Popen([exe, f"--app={url}", f"--user-data-dir={prof}", "--window-size=1380,920",
+                          "--no-first-run", "--no-default-browser-check", "--autoplay-policy=no-user-gesture-required"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    else:
+        import webbrowser
+        webbrowser.open(url)
+    return jsonify(ok=True, app=bool(exe))
 
 
 @app.post("/api/open-url")

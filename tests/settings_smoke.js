@@ -5,15 +5,17 @@ const vm = require('node:vm');
 const html = fs.readFileSync('static/index.html','utf8');
 const js = fs.readFileSync('static/app.js','utf8');
 const elements = Object.fromEntries([...html.matchAll(/id="([^"]+)"/g)].map(m => [m[1], {
-  value:'',checked:false,hidden:true,disabled:false,addEventListener(){},scrollIntoView(){},
+  value:'',checked:false,hidden:true,disabled:false,addEventListener(){},scrollIntoView(){},append(){},appendChild(){},
 }]));
 const cfg = {ai_mode:'local',api_provider:'openai',ai_setup_complete:false,ollama_auto_model:true,
   ollama_url:'http://127.0.0.1:11434',ollama_model:'qwen2.5:3b',openai_model:'gpt-4.1-mini',
   claude_model:'claude-sonnet-4-6',gemini_model:'gemini-2.5-flash',has_keys:{openai:true,claude:false,gemini:false},
   whisper_model:'large-v3-turbo',lyrics_language:'zh',convert_to_taiwan:true,
   separation_model:'UVR-MDX-NET-Inst_HQ_3.onnx',karaoke_model:'UVR_MDXNET_KARA_2.onnx',pitch_model:'auto'};
-let saved, appliedFont, prepared=0;
+let saved, appliedFont, prepared=0, sinkCalls=0;
 const context = vm.createContext({
+  AudioContext:class {setSinkId(){}},document:{createElement:()=>({})},
+  outDevices:async()=>[{label:'USB Output'}],applySink(){sinkCalls++;},
   $: selector => {const element=elements[selector.slice(1)];assert.ok(element,selector);return element;},
   api: async (path,opts) => {
     if(path==='/api/config' && opts) {saved=opts.json;Object.assign(cfg,saved);return {...cfg};}
@@ -40,8 +42,10 @@ vm.runInContext(js.slice(start,end),context);
     for(const other of ['openai','claude','gemini']) assert.equal(elements['cfg-'+other].hidden,other!==provider);
     elements['cfg-'+provider+'-key'].value='private-'+provider;
     elements['cfg-font'].value='sans';
+    elements['cfg-out'].value='USB Output';
     await context.saveSettings();
     assert.equal(saved.font,'sans');assert.equal(appliedFont,'sans');
+    assert.equal(saved.audio_out,'USB Output');assert.ok(sinkCalls>0);
     assert.equal(saved.api_provider,provider);assert.equal(saved.ai_mode,'api');
     assert.equal(saved[provider==='claude'?'anthropic_api_key':provider+'_api_key'],'private-'+provider);
     assert.equal(elements['cfg-'+provider+'-key'].value,'');

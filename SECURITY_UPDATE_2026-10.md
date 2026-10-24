@@ -1,4 +1,4 @@
-# 2026-10-23 Windows 安全更新指令
+# 2026-10-24 Windows 安全更新指令
 
 先儲存錄音並關閉點歌系統及練唱台。以下在 PowerShell 執行；自訂安裝位置請修改 `$AppDir`。這是已確認公告與套件版本的修補方式，不能據此判定電腦曾被入侵或已完全排除入侵。若您指的是另一則事件，需再對照公告／CVE。
 
@@ -31,7 +31,7 @@ npm audit --omit=dev
 
 ## 練唱台：修補 Python 套件
 
-受影響的 certifi 信任庫應升級至 **2026.10.19**。本次也將 pip 更新至 **26.2.2**，將舊的 Pillow 11.3.0 更新至 **13.0.0**，並在這些版本上執行回歸測試。1.6.2 的 requirements 已記錄新要求，但 **Update.exe 只複製程式，不會自動更新既有套件或 Python 核心**。
+受影響的 certifi 信任庫至少應升級至 **2026.10.19**；2026-10-24 再確認 PyPI 最新為 **2026.10.23**，以下使用此版本作為更新下限。本次也將 pip 更新至 **26.2.2**，將舊的 Pillow 11.3.0 更新至 **13.0.0**，並在這些版本上執行回歸測試。1.6.5 的 requirements 已記錄新要求，但 **Update.exe 只複製程式，不會自動更新既有套件或 Python 核心**。
 
 ```powershell
 $AppDir = Join-Path $env:LOCALAPPDATA 'LeihuLiantai'
@@ -40,7 +40,7 @@ if (Test-Path "$AppDir\secure-runtime\leihu-ready.json") {
     $Py = Join-Path $AppDir 'secure-runtime\Scripts\python.exe'
 }
 & $Py --version
-& $Py -m pip install --upgrade 'pip>=26.2.2' 'certifi>=2026.10.19' 'pillow==13.0.0'
+& $Py -m pip install --upgrade 'pip>=26.2.2' 'certifi>=2026.10.23' 'pillow==13.0.0'
 if ($LASTEXITCODE -ne 0) { throw 'Security package upgrade failed' }
 & $Py -m pip check
 & $Py -c "import certifi, PIL, pip; print('certifi',certifi.__version__); print('Pillow',PIL.__version__); print('pip',pip.__version__)"
@@ -61,7 +61,7 @@ winget install --id Python.Python.3.13 --exact --source winget
 # winget upgrade --id Python.Python.3.13 --exact --source winget
 ```
 
-重新開啟 PowerShell。先安裝本分支的 1.6.2 Update.exe，再執行：
+重新開啟 PowerShell。先安裝本分支的 1.6.5 Update.exe，再執行：
 
 ```powershell
 $AppDir = Join-Path $env:LOCALAPPDATA 'LeihuLiantai'

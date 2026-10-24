@@ -19,5 +19,5 @@ sudachipy
 sudachidict_small
 
 # Security: patched CA bundle and image/font decoders
-certifi>=2026.10.19
+certifi>=2026.10.23
 pillow>=13.0.0
