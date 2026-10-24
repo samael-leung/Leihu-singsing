@@ -1,3 +1,26 @@
+# 整合版 1.6.5 — 上游 1.6.4 與最新安全指令
+
+只發佈到 `leihu-song-request-sync` 分支。
+
+- **已有 Windows AI 選擇版 1.4.4～1.6.4：[程式更新檔 Update.exe](./LeihuLiantai-windows-ai-choice-1.6.5-Update.exe)**
+- [首次安裝／修復用 Setup.exe](./LeihuLiantai-windows-ai-choice-1.6.5-Setup.exe)
+- [完整移除工具](./LeihuLiantai-windows-ai-choice-1.6.5-CleanUninstall.exe)
+- **[2026-10-24 確認的 Node.js／Python 安全更新指令](../../SECURITY_UPDATE_2026-10.md)**
+
+合併原作者 `LeihuTW/Leihu-singsing` 的 1.6.4（`0ca04f8114a04706333a850c70d398463d2001ed`）：歌曲資料併發寫入與自動修復、排隊效能、獨立分享視窗及音樂輸出裝置選擇。保留所有既有 AI 模式與 API 供應商、強制對齊、播放清單匯入／重試、雙向點歌同步、模糊歌名及永久配對、FLAC 與日文標音功能。
+
+將上游原 Claude 用量檔的安全寫入方式套用至共用 ai_api.py，保留各供應商的來源記錄；強制對齊提交結果時也保護歌曲資料，並將自訂播放清單納入排隊顯示上限。新增私密設定／用量暫存檔與分享視窗資料的 Git 忽略規則。
+
+先儲存錄音、關閉程式，執行 Update.exe 選原安裝資料夾。歌曲、錄音、模型、設定及配對保留。**Update.exe 不會更新既有 Python 核心或套件**，請另外依安全說明更新。2026-10-24 再確認 Node.js 24.x 修補版仍為 24.22.1，pip 26.2.2、Pillow 13.0.0；certifi 更新為最新 2026.10.23，requirements 與遷移腳本同步更新。一般 Setup 的舊 bootstrap 仍建立 Python 3.11.9，不能視為已修補核心；安全說明包含獨立 secure-runtime 遷移與新捷徑指令，保留舊環境供回復。
+
+來源：`cd5383c259fa71462b3e42706e9ab803a3bdd378`，NSIS 3.11 建置。122 項 Python、11 項同步 JavaScript 及隔離點歌系統 7 項測試通過，另有 3 項 Python 測試依 AI 模式跳過，真實 CTC 模型推論未執行。新增併發寫入不遺失欄位、損壞 JSON 修復、播放清單排隊上限、各供應商用量紀錄及分享視窗啟動參數測試。設定（含輸出裝置與 API 金鑰）、直播歌詞及 USB 麥克風時脈 smoke 通過。
+
+實際 Flask／Node 配合 Chromium 驗證雙向選歌、保留點歌者、模糊比對、配對恢復、日文讀音與字體保存。修補後的已安裝 Python 測試套件與 googleapis 188.0.0 隔離副本稽核回報 0 項，但不涵蓋未安裝的完整 Windows／GPU／ML 套件或執行環境核心。Windows 遷移腳本、實際 Discord 畫面／聲音分享、實體音效裝置與 GPU 推論未在雲端驗證。
+
+更新包 27 個程式／字體／說明檔與來源逐一比對一致，不含執行環境或使用者資料；封裝與 SHA-256 見 [SHA256SUMS](./SHA256SUMS)。安裝檔未簽章。
+
+---
+
 # 整合版 1.6.2 — 上游 1.6.1 與安全更新指令
 
 只發佈到 `leihu-song-request-sync` 分支。
