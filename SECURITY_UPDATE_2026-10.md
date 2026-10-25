@@ -17,9 +17,13 @@ winget upgrade --id OpenJS.NodeJS.LTS --exact --source winget
 
 本次在乾淨目錄重現既有 package.json，稽核發現 googleapis 的間接 uuid 漏洞 [GHSA-w5hq-g745-h8pq](https://github.com/advisories/GHSA-w5hq-g745-h8pq)。單純 `npm audit fix` 無法消除受直接依賴版本限制的項目；以下指定升級已在隔離副本通過 7 項現有測試，並使 npm audit 回報 0 項。googleapis 為主要版本升級，真實 Google Sheets 帳戶仍需開機後確認。
 
-在 **twitch-song-request-system** 的資料夾執行：
+您提供的點歌系統資料夾是 **`F:\LeihuLiantai`**。先確認這裡包含 Node.js 專案的 `package.json`，再執行：
 
 ```powershell
+Set-Location -LiteralPath 'F:\LeihuLiantai'
+if (-not (Test-Path -LiteralPath '.\package.json')) {
+    throw '此資料夾沒有 package.json，請改用 Node.js 點歌系統專案的實際路徑；不要在 Python 練唱台資料夾執行 npm。'
+}
 npm install --save-exact --ignore-scripts googleapis@188.0.0
 if ($LASTEXITCODE -ne 0) { throw 'npm install failed' }
 npm test
@@ -29,9 +33,11 @@ npm audit --omit=dev
 
 以上會更新您本機的 package.json／相依套件；我沒有更動或推送點歌系統的分支。不要使用 `npm audit fix --force` 直接升級所有主要版本，也不要覆寫原本 .env 或金鑰。
 
+若 `F:\LeihuLiantai` 包含 `python\python.exe` 而沒有 `package.json`，它是練唱台的安裝資料夾；請在下方將 `$AppDir` 改成 `'F:\LeihuLiantai'`，npm 指令則要在另外的 Node.js 專案執行。
+
 ## 練唱台：修補 Python 套件
 
-受影響的 certifi 信任庫至少應升級至 **2026.10.19**；2026-10-24 再確認 PyPI 最新為 **2026.10.23**，以下使用此版本作為更新下限。本次也將 pip 更新至 **26.2.2**，將舊的 Pillow 11.3.0 更新至 **13.0.0**，並在這些版本上執行回歸測試。1.6.5 的 requirements 已記錄新要求，但 **Update.exe 只複製程式，不會自動更新既有套件或 Python 核心**。
+受影響的 certifi 信任庫至少應升級至 **2026.10.19**；2026-10-24 再確認 PyPI 最新為 **2026.10.23**，以下使用此版本作為更新下限。本次也將 pip 更新至 **26.2.2**，將舊的 Pillow 11.3.0 更新至 **13.0.0**，並在這些版本上執行回歸測試。1.6.6 的 requirements 已記錄新要求，但 **Update.exe 只複製程式，不會自動更新既有套件或 Python 核心**。
 
 ```powershell
 $AppDir = Join-Path $env:LOCALAPPDATA 'LeihuLiantai'
@@ -61,7 +67,7 @@ winget install --id Python.Python.3.13 --exact --source winget
 # winget upgrade --id Python.Python.3.13 --exact --source winget
 ```
 
-重新開啟 PowerShell。先安裝本分支的 1.6.5 Update.exe，再執行：
+重新開啟 PowerShell。先安裝本分支的 1.6.6 Update.exe，再執行：
 
 ```powershell
 $AppDir = Join-Path $env:LOCALAPPDATA 'LeihuLiantai'

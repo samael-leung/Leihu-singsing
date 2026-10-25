@@ -17,9 +17,9 @@
 
 ## Windows 安裝（windows-ai-choice）
 
-到 [installer/releases](installer/releases) 下載 `LeihuLiantai-windows-ai-choice-1.6.5-Setup.exe`。安裝到可寫入的資料夾，首次開啟後選擇 AI 模式。安裝程式先準備 Python、音訊套件及 UVR／Whisper；這一步不會下載 Ollama 或本機語言模型。已有安裝請關閉程式，安裝到原位置並選「更新」，保留歌曲、錄音與設定。
+到 [installer/releases](installer/releases) 下載 `LeihuLiantai-windows-ai-choice-1.6.6-Setup.exe`。安裝到可寫入的資料夾，首次開啟後選擇 AI 模式。安裝程式先準備 Python、音訊套件及 UVR／Whisper；這一步不會下載 Ollama 或本機語言模型。已有安裝請關閉程式，安裝到原位置並選「更新」，保留歌曲、錄音與設定。
 
-已安裝 Windows AI 選擇版 1.4.4～1.6.5 者，使用 `LeihuLiantai-windows-ai-choice-1.6.5-Update.exe` 即可加入雙向選歌；先儲存錄音、關閉程式，再選原安裝資料夾。這個程式更新檔不下載或重裝 Python、套件、模型，也不修改歌曲、錄音與設定。尚未完成安裝或更舊版本請使用完整 Setup.exe。
+已安裝 Windows AI 選擇版 1.4.4～1.6.6 者，使用 `LeihuLiantai-windows-ai-choice-1.6.6-Update.exe` 即可加入雙向選歌；先儲存錄音、關閉程式，再選原安裝資料夾。這個程式更新檔不下載或重裝 Python、套件、模型，也不修改歌曲、錄音與設定。尚未完成安裝或更舊版本請使用完整 Setup.exe。
 
 本機模式按「儲存」後才會沿用或安裝 Ollama、自動選模、下載並驗證回覆。下載中斷可再次儲存續傳。Ollama 官方 Windows 安裝檔會驗證 Authenticode 簽章，不會繞過驗證。API 模式不需要 Ollama，也不會下載本機語言模型。
 
@@ -124,12 +124,14 @@ Windows 安裝檔以 `sh installer/build.sh` 建置，需要 NSIS。Mac 請使�
 
 對應記錄儲存在本機 `song-request-links.json`，不含密鑰且不會上傳 Git；更新程式不會覆蓋它。反向選歌會優先使用記住的歌名，或比對點歌系統的歌曲清單，保留原本歌名、點歌者與調音，避免新增重複項目。歌曲仍須先匯入並完成旋律分析；沒有新增下載或分析步驟。選歌當下不記錄歷史，唱完才依點歌系統規則記錄。建議只開啟一個同步視窗，兩個專案皆須更新到整合分支最新版。
 
-## 整合版 1.6.5
+## 整合版 1.6.6
 
-本版合併原作者 `LeihuTW/Leihu-singsing` 的 1.6.4（`0ca04f8`）：歌曲資料併發寫入保護與損壞資料自動修復、排隊效能、獨立分享視窗與音樂輸出裝置選擇。保留先前遠端開歌與 KEY、繁簡搜尋、表單匯入、FLAC 分軌與容量整理、預先下載、背景歌詞搜尋及精細處理。也包含先前日文標音、字體、USB 麥克風、錄音與匯出的上游改善。保留本機／Claude／Gemini／OpenAI 選擇、音訊強制對齊、YouTube 播放清單批量匯入、點歌系統雙向同步、YouTube 歌名自動比對及記住對應。
+本版合併原作者 `LeihuTW/Leihu-singsing` 的 1.6.5（`9628d05`）：依主唱／合音／伴奏組合計算音量平衡、舊歌曲背景補量響度，以及新匯入預設先搜尋並套用線上歌詞（仍可在設定啟用自動辨識）。保留歌曲資料併發寫入保護與損壞資料自動修復、排隊效能、獨立分享視窗與音樂輸出裝置選擇。保留先前遠端開歌與 KEY、繁簡搜尋、表單匯入、FLAC 分軌與容量整理、預先下載、背景歌詞搜尋及精細處理。也包含先前日文標音、字體、USB 麥克風、錄音與匯出的上游改善。保留本機／Claude／Gemini／OpenAI 選擇、音訊強制對齊、YouTube 播放清單批量匯入、點歌系統雙向同步、YouTube 歌名自動比對及記住對應。
 
-後續更新只發佈至本儲存庫的 `leihu-song-request-sync` 分支。已有 1.4.4～1.6.4 安裝可使用 1.6.5 Update.exe 更新程式，不用重新安裝執行環境；歌曲、API 設定與歌曲對應紀錄保留。上游的高品質分離模型首次使用會在背景下載約 900 MB；下載完成前先用標準模型，可在設定選「標準」沿用原本模型。重新辨識歌詞不會覆蓋手動編輯、各 AI 供應商或音訊強制對齊的歌詞。
+後續更新只發佈至本儲存庫的 `leihu-song-request-sync` 分支。已有 1.4.4～1.6.5 安裝可使用 1.6.6 Update.exe 更新程式，不用重新安裝執行環境；歌曲、API 設定與歌曲對應紀錄保留。上游的高品質分離模型首次使用會在背景下載約 900 MB；下載完成前先用標準模型，可在設定選「標準」沿用原本模型。重新辨識歌詞不會覆蓋手動編輯、各 AI 供應商或音訊強制對齊的歌詞。
 
 日文標音使用本機 SudachiPy 字典。舊版直接使用 Update.exe 即可，首次啟用標音時會在背景下載約 45 MB 的 Python 字典套件，不必重裝主程式或另外安裝同步軟體；完整 Setup.exe 會預先安裝字典。內建字體及授權檔隨程式更新，不需安裝系統字體。
 
 安全更新：requirements 已更新 certifi／Pillow，並提供獨立 Python 3.13 執行環境的遷移腳本；**Update.exe 本身不更新 Python 核心或既有套件**。Node.js、Python／pip 與憑證事件的 PowerShell 指令及驗證範圍見 [2026 年 10 月安全更新說明](SECURITY_UPDATE_2026-10.md)。舊版內嵌 Python 3.11.9 需另外遷移，不能只更新系統 Python。
+
+點歌系統的本機資料夾依使用者提供為 `F:\LeihuLiantai`；安全指令已加入該路徑及 package.json 檢查。若這裡其實是含 python/python.exe 的練唱台目錄，請用 Python 更新指令，並另找含 package.json 的 Node.js 專案目錄執行 npm。

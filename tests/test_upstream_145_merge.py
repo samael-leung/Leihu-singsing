@@ -37,7 +37,7 @@ class UpstreamMergeTests(unittest.TestCase):
         self.assertAlmostEqual(loud - quiet, 6.02, delta=0.03)
         self.assertIsNone(P.integrated_loudness(np.zeros((2, P.SR)), P.SR))
         self.assertIsNone(P.integrated_loudness(np.zeros((2, 100)), P.SR))
-        self.assertEqual(P.norm_gain_db({'lufs': -60}), 10)
+        self.assertEqual(P.norm_gain_db({'lufs': -60}), 12)
         self.assertEqual(P.norm_gain_db({'lufs': 0}), -15)
         self.assertEqual(P.norm_gain_db({}), 0)
 
