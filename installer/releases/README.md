@@ -1,3 +1,24 @@
+# 整合版 1.6.6 — 上游 1.6.5 與 F:\LeihuLiantai 操作指引
+
+只發佈到 `leihu-song-request-sync` 分支。
+
+- **已有 Windows AI 選擇版 1.4.4～1.6.5：[程式更新檔 Update.exe](./LeihuLiantai-windows-ai-choice-1.6.6-Update.exe)**
+- [首次安裝／修復用 Setup.exe](./LeihuLiantai-windows-ai-choice-1.6.6-Setup.exe)
+- [完整移除工具](./LeihuLiantai-windows-ai-choice-1.6.6-CleanUninstall.exe)
+- [安全更新指令：含使用者提供的點歌系統目錄 F:\LeihuLiantai](../../SECURITY_UPDATE_2026-10.md)
+
+已合併原作者 1.6.5（`9628d05d2fc3e65a001e5cbe98aff8b79c76da96`）：依主唱／合音／伴奏開關組合調整音量、舊歌曲背景補量響度及新匯入預設先搜尋並套用線上歌詞。仍可在設定啟用匯入時自動辨識，或對單首歌重新辨識。保留既有全部 AI 供應商、本機模式、音訊強制對齊、播放清單批次匯入／重試、雙向點歌同步、模糊歌名與永久配對、FLAC、日文讀音及分享視窗功能。
+
+儲存錄音並關閉程式後，執行 Update.exe 選原安裝資料夾。歌曲、錄音、模型、設定與配對保留，不需要 ngrok。**Update.exe 不會替換 Python 核心或更新既有套件**，安全指令需另外執行。2026-10-25 再確認 Node.js 24.22.1、pip 26.2.2、certifi 2026.10.23、Pillow 13.0.0；googleapis 188.0.0 隔離副本的 npm audit 仍回報 0 項。安全說明包含 Python 核心另外遷移的指令與驗證限制。
+
+點歌系統路徑依使用者提供為 `F:\LeihuLiantai`。npm 前會檢查 package.json；若只有 python/python.exe 而沒有 package.json，應將它視為練唱台安裝目錄，使用 Python 更新指令，並另找 Node.js 專案目錄。雲端無法直接檢查使用者 F 槽。
+
+來源：`16bc636b7a1b05a3056d7cbd3ad64e6f181beb2e`，NSIS 3.11 建置。127 項 Python 與 11 項同步 JavaScript 測試通過，另有 3 項 Python 測試依 AI 模式跳過；真實 CTC 模型推論未執行。新增實際分軌響度組合、快取與失效、卡拉 OK 音量、預設／明確辨識選擇、自動套用線上歌詞及不覆蓋強制對齊結果的測試。
+
+設定、直播歌詞、麥克風時脈 smoke 及實際 Flask／Node／Chromium 的雙向同步、配對恢復、日文標音和字體保存驗證通過。更新包 27 個程式／字體／說明檔與來源逐一比對一致，不含執行環境、模型或使用者設定；封裝與 SHA-256 見 [SHA256SUMS](./SHA256SUMS)。Windows 遷移、實際音訊分享與 GPU 推論尚需實機驗證，安裝檔未簽章。
+
+---
+
 # 整合版 1.6.5 — 上游 1.6.4 與最新安全指令
 
 只發佈到 `leihu-song-request-sync` 分支。
