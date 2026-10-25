@@ -31,7 +31,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Tests failed; do not start yet' }
 npm audit --omit=dev
 ```
 
-以上會更新您本機的 package.json／相依套件；我沒有更動或推送點歌系統的分支。不要使用 `npm audit fix --force` 直接升級所有主要版本，也不要覆寫原本 .env 或金鑰。
+以上會更新您本機的 package.json／相依套件；這組 Google API 升級與相容修復已正式納入點歌系統的 `leihu-song-request-sync` 分支，並納入 package-lock.json 供重現與稽核。不要使用 `npm audit fix --force` 直接升級所有主要版本，也不要覆寫原本 .env 或金鑰。
 
 若 `F:\LeihuLiantai` 包含 `python\python.exe` 而沒有 `package.json`，它是練唱台的安裝資料夾；請在下方將 `$AppDir` 改成 `'F:\LeihuLiantai'`，npm 指令則要在另外的 Node.js 專案執行。
 

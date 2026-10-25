@@ -135,3 +135,5 @@ Windows 安裝檔以 `sh installer/build.sh` 建置，需要 NSIS。Mac 請使�
 安全更新：requirements 已更新 certifi／Pillow，並提供獨立 Python 3.13 執行環境的遷移腳本；**Update.exe 本身不更新 Python 核心或既有套件**。Node.js、Python／pip 與憑證事件的 PowerShell 指令及驗證範圍見 [2026 年 10 月安全更新說明](SECURITY_UPDATE_2026-10.md)。舊版內嵌 Python 3.11.9 需另外遷移，不能只更新系統 Python。
 
 點歌系統的本機資料夾依使用者提供為 `F:\LeihuLiantai`；安全指令已加入該路徑及 package.json 檢查。若這裡其實是含 python/python.exe 的練唱台目錄，請用 Python 更新指令，並另找含 package.json 的 Node.js 專案目錄執行 npm。
+
+點歌系統相容修復已由使用者在 `E:\songRequest` 確認可正常同步。已正式整合至 [twitch-song-request-system 的 leihu-song-request-sync 分支](https://github.com/samael-leung/twitch-song-request-system/tree/leihu-song-request-sync)；既有另含自訂原生功能的 ZIP 安裝可保留已成功套用的修復包。
