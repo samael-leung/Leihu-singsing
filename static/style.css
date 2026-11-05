@@ -381,3 +381,26 @@ a.tab { text-decoration: none; font-size: 14px; }
 .judge .miss .g { color: #9aa3ad; }
 @keyframes jpop { 0% { transform: scale(.5); opacity: 0; } 12% { transform: scale(1.18); opacity: 1; } 24% { transform: scale(1); }
   75% { opacity: 1; transform: translateY(0); } 100% { opacity: 0; transform: translateY(-8px); } }
+
+/* 1.7：男女對唱、旋律譜 */
+:root { --part-m: #2f78c4; --part-f: #d0457f; --part-b: #7b4fc9; }
+@media (prefers-color-scheme: dark) { :root { --part-m: #5ea2e8; --part-f: #ec7aa8; --part-b: #a585e6; } }
+.parts-box { border-top: 1px solid var(--line); padding-top: 10px; margin-top: 4px; display: grid; gap: 8px; }
+.sw.part-m { background: var(--part-m); } .sw.part-f { background: var(--part-f); } .sw.part-b { background: var(--part-b); }
+.parts-sheet { width: min(720px, 100%); }
+.pd-names { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+.pd-names label { display: flex; gap: 6px; align-items: center; }
+.pd-names input { width: 8em; }
+.pd-names .sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+.pd-list { display: grid; gap: 2px; max-height: 55vh; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+.pd-row { display: grid; grid-template-columns: 4.2em minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 5px 8px; border-left: 4px solid transparent; }
+.pd-row:nth-child(even) { background: var(--shade); }
+.pd-row.p-m { border-left-color: var(--part-m); } .pd-row.p-f { border-left-color: var(--part-f); } .pd-row.p-b { border-left-color: var(--part-b); }
+.pd-row .tm { font-family: var(--mono); font-size: 12px; color: var(--muted); background: none; border: 0; padding: 0; cursor: pointer; text-align: left; }
+.pd-row .tx { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pd-row .tx .q { color: var(--melody); font-weight: 600; margin-left: 4px; }
+.pd-seg { display: flex; gap: 2px; }
+.pd-seg button { padding: 2px 9px; font-size: 13px; }
+.pd-seg button.on.m { background: var(--part-m); border-color: var(--part-m); color: #fff; }
+.pd-seg button.on.f { background: var(--part-f); border-color: var(--part-f); color: #fff; }
+.pd-seg button.on.b { background: var(--part-b); border-color: var(--part-b); color: #fff; }

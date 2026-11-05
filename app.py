@@ -19,8 +19,10 @@ from flask import Flask, abort, jsonify, request, send_file, send_from_directory
 import claude_api as C
 import pipeline as P
 import share as SH
+import duet as DU   # 1.7：男女對唱分聲部
+import score_sheet as SS   # 1.7：旋律譜匯出
 
-VERSION = "1.6.8"
+VERSION = "1.7.0"
 HOST, PORT = "127.0.0.1", int(os.environ.get("LIANTAI_PORT", "8765"))
 app = Flask(__name__, static_folder=str(P.ROOT / "static"), static_url_path="/static")
 app.config["MAX_CONTENT_LENGTH"] = 1024 * 1024 * 1024
@@ -452,6 +454,8 @@ def song(sid):
     meta["norm_target"] = P.TARGET_LUFS
     meta["norm_range"] = [P.NORM_MIN_DB, P.NORM_MAX_DB]
     meta["takes"] = P.list_takes(d)
+    meta["parts_stems"] = DU.stems_ready(d)
+    meta["parts_model"] = DU.model_ready()
     return jsonify(meta)
 
 
@@ -529,6 +533,50 @@ def queue_max(sid: str) -> str:
         except Exception as e:
             P.log_error("queue_max prerender", e)
     return jobs.submit("process", sid, run, label="max")
+
+
+@app.get("/api/songs/<sid>/parts")
+def get_parts(sid):
+    d = P.song_dir(sid)
+    data = DU.load_parts(d)
+    return jsonify(parts=data, stems=DU.stems_ready(d), model=DU.model_ready(), gpu=P.cuda_ok())
+
+
+@app.post("/api/songs/<sid>/parts/analyze")
+def analyze_parts(sid):
+    """男女對唱：分開男女聲（可選）並判斷每句是誰唱的。排進處理佇列。"""
+    d = P.song_dir(sid)
+    meta = P.read_meta(d)
+    if not meta.get("steps", {}).get("separate") or not meta.get("steps", {}).get("pitch"):
+        raise P.UserError("這首歌還沒處理完（分軌、旋律分析），處理完再分聲部")
+    use_model = bool((request.get_json(force=True) or {}).get("model", True))
+    if use_model and not P.module_status()["uvr"]:
+        raise P.UserError("沒有安裝 AI 人聲分離元件，只能用音高判斷每句是誰唱的")
+    label = "parts" + ("+mf" if use_model else "")
+    jid = jobs.find("process", sid, label) or jobs.submit("process", sid, DU.job(sid, use_model), label=label)
+    return jsonify(job=jid)
+
+
+@app.post("/api/songs/<sid>/parts")
+def save_parts(sid):
+    d = P.song_dir(sid)
+    body = request.get_json(force=True) or {}
+    if not isinstance(body.get("lines"), list):
+        raise P.UserError("格式不正確")
+    return jsonify(parts=DU.save_manual(d, body["lines"], body.get("names")))
+
+
+@app.post("/api/songs/<sid>/sheet")
+def export_sheet(sid):
+    """1.7：把旋律＋歌詞畫成一頁頁的圖片（旋律譜），存到下載資料夾。"""
+    d = P.song_dir(sid)
+    body = request.get_json(force=True) or {}
+    meta = P.read_meta(d)
+    body.setdefault("title", meta.get("title", ""))
+    layout = "A4" if body.get("layout") == "a4" else "手機"
+    folder = P.downloads_dir() / P.APP_NAME / f"{SS.safe_name(meta.get('title', '旋律譜'))} 旋律譜（{layout}）"
+    files, tonic = SS.render(d, body, folder)
+    return jsonify(files=[str(f) for f in files], folder=str(folder), tonic=tonic)
 
 
 @app.get("/api/songs/<sid>/pitch")
@@ -697,7 +745,7 @@ def storage_compact():
 @app.get("/api/songs/<sid>/audio/<stem>")
 def audio(sid, stem):
     d = P.song_dir(sid)
-    if stem not in P.STEMS + ("mix",):
+    if stem not in P.STEMS + ("mix",) + DU.PART_STEMS:
         abort(404)
     key, speed = _key_speed()
     base = d if stem == "mix" else P.variant_dir(d, key, speed)
