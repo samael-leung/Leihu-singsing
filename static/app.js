@@ -1153,6 +1153,7 @@ $("#sd-go").onclick = async () => {
   } catch (e) { msg.textContent = e.message; }
   finally { btn.disabled = false; }
 };
+$("#sheet-open2").onclick = () => $("#sheet-open").click();   // 旋律下方工具列的捷徑
 $("#sd-show").onclick = () => sheetFirst && api("/api/reveal", { json: { path: sheetFirst } }).catch(e => toast(e.message));
 $("#sd-close").onclick = () => { $("#sheet-dlg").hidden = true; };
 $("#sheet-dlg").addEventListener("click", e => { if (e.target.id === "sheet-dlg") $("#sd-close").click(); });
