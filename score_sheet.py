@@ -65,8 +65,9 @@ def _font(size: int, bold: bool = False):
 
 def _chunks(line: dict, notes: list, max_chars: int, max_span: float) -> list[dict]:
     """一句太長就從中間最大的空隙切開，直到每段的字數和長度都放得下。"""
-    chars = [c for c in line["chars"] if c["c"].strip()]
     t0, t1 = line["t"], line["end"]
+    # 逐字時間略早於句首或晚於句尾時（手動調整過時間常見），算進第一段／最後一段，字才不會不見
+    chars = [dict(c, t=min(max(c["t"], t0), t1 - 0.01)) for c in line["chars"] if c["c"].strip()]
     segs = [(t0, t1)]
     out = []
     while segs:
@@ -136,6 +137,7 @@ def render(d: Path, data: dict, out_dir: Path) -> tuple[list[Path], str]:
     f_title, f_sub, f_small = _font(int(fs * 1.5), True), _font(int(fs * 0.8)), _font(int(fs * 0.62))
     f_lyr = _font(fs)
     f_lbl = _font(int(fs * 0.62), True)
+    f_tag = _font(int(fs * 0.72))   # 列首的聲部字（不用粗體：小字加粗會糊成一團）
     tag_w = int(fs * 1.5) if show_parts else 0
     row_x0, row_x1 = M + tag_w, W - M
     row_w = row_x1 - row_x0
@@ -221,7 +223,7 @@ def render(d: Path, data: dict, out_dir: Path) -> tuple[list[Path], str]:
         if show_parts and row["part"]:
             dr.rounded_rectangle((M, top, M + 8, top + (hi - lo + 1) * unit), 4, fill=color)
             dr.text((M + 16, top), {"m": names.get("m", "男聲")[:1], "f": names.get("f", "女聲")[:1], "b": "合"}
-                    [row["part"]], font=f_lbl, fill=color)
+                    [row["part"]], font=f_tag, fill=color)
         dr.text((row_x1, y - 2), SH_time(row["t"]), font=f_small, fill=MUTED, anchor="ra")
         # 音符方塊與標記（擋到前一個標記就不畫，免得擠成一團）
         last_lbl = -1e9
@@ -256,7 +258,7 @@ def render(d: Path, data: dict, out_dir: Path) -> tuple[list[Path], str]:
         if row["chars"]:
             xpos = row_x0 - 1e9
             for c in row["chars"]:
-                x = max(X(c["t"]), xpos)
+                x = max(X(c["t"]), xpos, row_x0)
                 cw = f_lyr.getlength(c["c"])
                 if x + cw > row_x1 + fs * 0.5:
                     x = row_x1 - cw
