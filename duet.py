@@ -23,10 +23,12 @@ import pipeline as P
 
 MF_MODEL = "model_chorus_bs_roformer_ep_267_sdr_24.1275.ckpt"
 MF_YAML = "config_chorus_male_female_bs_roformer.yaml"
-# 只用 GitHub 原檔：大檔會分段同時下載，混用不同鏡像有可能接出壞檔
+# 作者在 Hugging Face 的原檔放第一個（GitHub 的備份常回 504 逾時）。兩邊是同一個檔案（SHA-256 相同），
+# 分段下載混用來源也沒關係，下載完會核對大小和檢查碼
+_HF_MF = "https://huggingface.co/Sucial/Chorus_Male_Female_BS_Roformer/resolve/main/"
 P.MODEL_FILES.setdefault(MF_MODEL, (527121477, "123c00786bdbc6bd462dddb35cd21fd6ae99ab8319f93f63a8abc1012e593d94",
-                                    [P._GH_AS + MF_MODEL]))
-P.MODEL_FILES.setdefault(MF_YAML, (None, None, [P._GH_AS + MF_YAML]))
+                                    [_HF_MF + MF_MODEL, P._GH_AS + MF_MODEL]))
+P.MODEL_FILES.setdefault(MF_YAML, (None, None, [_HF_MF + MF_YAML, P._GH_AS + MF_YAML]))
 PART_STEMS = ("male", "female")
 PARTS_VER = 1
 DEFAULT_NAMES = {"m": "男聲", "f": "女聲"}

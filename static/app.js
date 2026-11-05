@@ -1147,8 +1147,9 @@ $("#sd-go").onclick = async () => {
       layout: $("#sd-layout").value, notation: $("#sd-notation").value, tonic: $("#sd-tonic").value,
       parts: $("#sd-parts").checked && !!S.parts, names: S.parts?.names, lines } });
     sheetFirst = r.files[0] || "";
-    msg.textContent = `已存 ${r.files.length} 張圖片${r.tonic ? `（1 = ${r.tonic}）` : ""}到：${r.folder}`;
+    msg.textContent = `已存 ${r.files.length} 張圖片${r.tonic ? `（1 = ${r.tonic}）` : ""}到「下載」資料夾：${r.folder}`;
     $("#sd-show").hidden = !sheetFirst;
+    if (sheetFirst) api("/api/reveal", { json: { path: sheetFirst } }).catch(() => {});   // 直接打開資料夾，不用自己找
   } catch (e) { msg.textContent = e.message; }
   finally { btn.disabled = false; }
 };
