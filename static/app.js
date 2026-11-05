@@ -710,8 +710,6 @@ async function openSong(id) {
     api(`/api/songs/${id}`), api(`/api/songs/${id}/pitch`), api(`/api/songs/${id}/lyrics`),
   ]);
   S.song = song; titles[id] = song.title; syncGroupBtn();
-  S.parts = null; S.partMode = store.get(`part:${id}`, "all");
-  loadParts(id);
   S.pitch = { hop: pitch.hop, midi: Float32Array.from(pitch.midi, v => (v == null ? NaN : v)) };
   S.notes = pitch.notes.map(([s, e, m]) => ({ s, e, m }));
   S.autoLrc = lyr.auto;
@@ -784,14 +782,13 @@ async function loadAudio() {
     if (req !== S.audioReq) return;
     busy.textContent = "解碼音訊…";
     const ctx = ac();
-    const names = ["lead", "back", "inst"].concat(S.song.parts_stems ? ["male", "female"] : []);   // 1.7：男女聲軌
-    const stems = await Promise.all(names.map(async s => {
+    const stems = await Promise.all(["lead", "back", "inst"].map(async s => {
       const r = await fetch(`/api/songs/${id}/audio/${s}?${q}`);
       if (!r.ok) throw new Error("讀不到分軌檔");
       return ctx.decodeAudioData(await r.arrayBuffer());
     }));
     if (!S.song || S.song.id !== id || req !== S.audioReq) return;
-    S.bufs = { lead: stems[0], back: stems[1], inst: stems[2], male: stems[3] || null, female: stems[4] || null };
+    S.bufs = { lead: stems[0], back: stems[1], inst: stems[2] };
     S.dur = S.song.duration || stems[2].duration * S.speed;
     S.guide = await renderGuide();
     $("#seek").max = String(S.dur);
@@ -865,7 +862,7 @@ function play() {
   }
   const now = c.currentTime + 0.06;
   const pos = S.t / S.speed;
-  const srcs = { lead: S.bufs.lead, back: S.bufs.back, inst: S.bufs.inst, guide: S.guide, male: S.bufs.male, female: S.bufs.female };
+  const srcs = { lead: S.bufs.lead, back: S.bufs.back, inst: S.bufs.inst, guide: S.guide };
   for (const [k, buf] of Object.entries(srcs)) {
     if (!buf || pos >= buf.duration) continue;
     startNode(k, buf, now, pos);
@@ -877,7 +874,6 @@ function play() {
     }
   }
   S.startCtx = now; S.playing = true;
-  partGates(true);
   $("#play").textContent = "暫停";
 }
 /* 1.4.5：音量標準化。主唱／合音／伴奏先經過這條「歌曲」線路：依整首歌的響度加減音量，
@@ -955,173 +951,11 @@ $("#norm-vol").onchange = e => { S.normVol = e.target.checked; store.set("normVo
 function startNode(k, buf, when, pos) {
   const c = ac();
   const src = c.createBufferSource(); src.buffer = buf;
-  const g = c.createGain(); g.gain.value = trackVol(k);
-  // 1.7：主唱、合音、男女聲軌多一道「聲部開關」，男女對唱時依每句自動開關
-  const gate = PART_TRACKS.includes(k) ? c.createGain() : null;
-  if (gate) gate.gain.value = k === "male" || k === "female" ? 0 : 1;
-  (gate ? src.connect(g).connect(gate) : src.connect(g)).connect(["lead", "back", "inst", "male", "female"].includes(k) ? songBus() : c.destination);
+  const g = c.createGain(); g.gain.value = S.vol[k] ?? 1;
+  src.connect(g).connect(["lead", "back", "inst"].includes(k) ? songBus() : c.destination);
   src.start(when, pos);
-  S.nodes[k] = { src, g, gate };
+  S.nodes[k] = { src, g };
 }
-/* ------------------------------------------------------------ 1.7：男女對唱 */
-const PART_TRACKS = ["lead", "back", "male", "female"];
-const PART_LABEL = { m: "男", f: "女", b: "合" };
-function trackVol(k) { return k === "male" || k === "female" ? S.vol.lead ?? 1 : S.vol[k] ?? 1; }
-function syncPartVol() { for (const k of ["male", "female"]) if (S.nodes[k]) S.nodes[k].g.gain.value = trackVol(k); }
-function partColor(p) {
-  if (!S.parts || !p) return colors.melody;
-  return colors[`part-${p}`] || colors.melody;
-}
-function partName(p) { return p === "b" ? "一起唱" : (S.parts?.names || {})[p] || (p === "m" ? "男聲" : "女聲"); }
-async function loadParts(id) {
-  try {
-    const r = await api(`/api/songs/${id}/parts`);
-    if (!S.song || S.song.id !== id) return;
-    S.parts = r.parts; S.partInfo = r;
-  } catch { S.parts = null; }
-  applyParts(); syncPartsUi();
-}
-function medianPitch(a, b) {
-  if (!S.pitch) return null;
-  const v = [];
-  for (let i = Math.max(0, Math.floor(a / S.pitch.hop)); i <= Math.min(S.pitch.midi.length - 1, b / S.pitch.hop); i++)
-    if (!isNaN(S.pitch.midi[i])) v.push(S.pitch.midi[i]);
-  if (v.length < 8) return null;
-  v.sort((x, y) => x - y);
-  return v[v.length >> 1];
-}
-/* 把存好的標記對到目前的歌詞（時間差 0.6 秒內就是同一句）；歌詞改過、多出來的句子用音高補判斷 */
-function applyParts() {
-  const P = S.parts;
-  for (const l of S.lines) {
-    l.part = ""; l.partAuto = true; l.partConf = 0;
-    if (!P) continue;
-    let best = null, bd = 0.6;
-    for (const x of P.lines || []) { const d = Math.abs(x.t - l.t); if (d <= bd) { bd = d; best = x; } }
-    if (best) { l.part = best.p || ""; l.partAuto = !!best.auto; l.partConf = best.conf ?? 1; }
-    else if (P.split != null) {
-      const m = medianPitch(l.t, l.end || l.t + 3);
-      if (m != null) { l.part = m < P.split ? "m" : "f"; l.partConf = Math.min(1, Math.abs(m - P.split) / 3) * 0.8; }
-    }
-  }
-  for (const n of S.notes) {   // 每個音符屬於哪一句的聲部（卷軸上色）
-    n.part = "";
-    if (!P) continue;
-    const l = S.lines.find(l => n.s >= l.t - 0.15 && n.s < (l.end || l.t + 3) + 0.1);
-    if (l) n.part = l.part;
-  }
-  JG.phr = null; S.dirty = true;
-}
-function syncPartsUi() {
-  const has = !!S.parts, stems = !!S.song?.parts_stems;
-  const sel = $("#part-mode");
-  sel.disabled = !has; $("#parts-edit").disabled = !has;
-  sel.options[1].textContent = `我唱${partName("m")}`; sel.options[2].textContent = `我唱${partName("f")}`;
-  if (!has) S.partMode = "all";
-  sel.value = S.partMode;
-  $("#parts-run").textContent = stems ? "重新 AI 分析" : "AI 分析男女聲部";
-  const n = { m: 0, f: 0, b: 0 };
-  for (const l of S.lines) if (n[l.part] != null) n[l.part]++;
-  $("#parts-msg").textContent = !has
-    ? "男女合唱的歌：選「我唱男聲」，男聲的句子會自動靜音，一起唱的句子只留女聲，反過來也一樣。"
-    : `${partName("m")} ${n.m} 句、${partName("f")} ${n.f} 句、一起唱 ${n.b} 句。`
-      + (n.b && !stems ? "一起唱的句子要先「AI 分析男女聲部」才能只留一邊，目前會照常播放。" : "")
-      + (S.parts.split == null && !stems ? "兩邊音高差不多，沒辦法自動分，請在「每句聲部」手動標。" : "");
-}
-/* 依播放位置開關：我唱男聲＝男聲的句子關掉主唱；一起唱的句子關掉主唱、改播分出來的女聲軌 */
-function partTarget(t) {
-  const out = { lead: 1, back: 1, male: 0, female: 0 };
-  if (!S.parts || S.partMode === "all") return out;
-  const me = S.partMode, other = me === "m" ? "f" : "m";
-  const l = S.lines.find(l => t >= l.t - 0.06 && t < (l.end || l.t + 3) + 0.12);
-  if (!l || !l.part || l.part === other) return out;
-  const withBack = S.parts.src === "lead+back";   // 合唱模式：第二位歌手常被分到合音軌
-  if (l.part === me) { out.lead = 0; if (withBack) out.back = 0; return out; }
-  if (S.bufs.male && S.bufs.female) {           // 一起唱：只留對方的聲音
-    out.lead = 0; if (withBack) out.back = 0;
-    out[other === "m" ? "male" : "female"] = 1;
-  }
-  return out;
-}
-function partGates(now) {
-  if (!S.playing) return;
-  const want = partTarget(cur() + 0.04 * S.speed);   // 提早一點點，第一個字不會漏出來
-  const c = ac();
-  for (const k of PART_TRACKS) {
-    const n = S.nodes[k];
-    if (!n || !n.gate || n.gateV === want[k]) continue;
-    n.gateV = want[k];
-    if (now) n.gate.gain.value = want[k];
-    else n.gate.gain.setTargetAtTime(want[k], c.currentTime, 0.025);
-  }
-}
-$("#part-mode").onchange = e => {
-  S.partMode = e.target.value; if (S.song) store.set(`part:${S.song.id}`, S.partMode);
-  JG.phr = null; JG.done.clear(); partGates(false); S.dirty = true;
-};
-async function runParts(model) {
-  if (!S.song) return;
-  const id = S.song.id;
-  if (model && !S.song.parts_model) {
-    const gpu = S.partInfo?.gpu;
-    if (!confirm(`第一次使用要下載男女聲分離模型（約 530 MB）。${gpu ? "" : "\n\n這台電腦沒有可用的 NVIDIA 顯示卡，分離會用 CPU，一首 4 分鐘的歌可能要 20～30 分鐘。"}\n\n要開始嗎？`)) return;
-  }
-  const msg = $("#parts-msg");
-  try {
-    const r = await api(`/api/songs/${id}/parts/analyze`, { json: { model } });
-    $("#parts-run").disabled = $("#parts-pitch").disabled = true;
-    await waitJob(r.job, j => { msg.textContent = j.status === "queued" ? "排隊中，等前面的工作完成…" : `${j.step}（${Math.round(j.progress * 100)}%）`; });
-    if (!S.song || S.song.id !== id) return;
-    S.song = await api(`/api/songs/${id}`);
-    if (S.partMode === "all") { S.partMode = "m"; store.set(`part:${id}`, "m"); }
-    await loadParts(id);
-    if (model) { const t = cur(), was = S.playing; pause(); await loadAudio(); S.t = t; if (was) play(); }
-    toast("已分好聲部，可以選要唱哪一邊；判斷錯的句子在「每句聲部」修改", 5000);
-  } catch (e) { msg.textContent = e.message; }
-  finally { $("#parts-run").disabled = $("#parts-pitch").disabled = false; }
-}
-$("#parts-run").onclick = () => runParts(true);
-$("#parts-pitch").onclick = () => runParts(false);
-
-/* 每句聲部：手動修改 */
-function renderPartsDlg() {
-  const box = $("#pd-list");
-  box.innerHTML = S.lines.map((l, i) => `<div class="pd-row p-${l.part || "n"}" data-i="${i}">
-      <button class="tm" data-seek="${i}" title="跳到這句">${fmt(l.t, 0)}</button>
-      <span class="tx">${escH(l.text)}${l.partAuto && l.part && l.partConf < 0.5 ? `<span class="q" title="自動判斷比較沒把握">?</span>` : ""}</span>
-      <span class="pd-seg">${["m", "f", "b"].map(p => `<button class="${l.part === p ? "on " + p : ""}" data-p="${p}" title="${partName(p)}">${p === "b" ? "合" : partName(p).slice(0, 2)}</button>`).join("")}</span>
-    </div>`).join("") || `<p class="hint" style="padding:8px">這首歌還沒有有時間的歌詞。</p>`;
-  $("#pd-name-m").value = partName("m"); $("#pd-name-f").value = partName("f");
-}
-let partSaveTimer = 0;
-function savePartsSoon() {
-  clearTimeout(partSaveTimer);
-  $("#pd-msg").textContent = "儲存中…";
-  partSaveTimer = setTimeout(async () => {
-    if (!S.song) return;
-    try {
-      const lines = S.lines.map(l => ({ t: l.t, end: l.end, text: l.text, p: l.part || "", auto: l.partAuto, conf: l.partConf }));
-      const r = await api(`/api/songs/${S.song.id}/parts`, { json: { lines, names: { m: $("#pd-name-m").value, f: $("#pd-name-f").value } } });
-      S.parts = r.parts; applyParts(); syncPartsUi();
-      $("#pd-msg").textContent = "已儲存";
-    } catch (e) { $("#pd-msg").textContent = e.message; }
-  }, 500);
-}
-$("#pd-list").addEventListener("click", e => {
-  const sk = e.target.closest("[data-seek]");
-  if (sk) { seek(S.lines[+sk.dataset.seek].t - 0.5); return; }
-  const b = e.target.closest("[data-p]");
-  if (!b) return;
-  const l = S.lines[+b.closest(".pd-row").dataset.i];
-  l.part = l.part === b.dataset.p ? "" : b.dataset.p; l.partAuto = false; l.partConf = 1;
-  for (const n of S.notes) if (n.s >= l.t - 0.15 && n.s < (l.end || l.t + 3) + 0.1) n.part = l.part;
-  renderPartsDlg(); savePartsSoon(); S.dirty = true;
-});
-$("#pd-name-m").oninput = $("#pd-name-f").oninput = () => savePartsSoon();
-$("#parts-edit").onclick = () => { renderPartsDlg(); $("#pd-msg").textContent = ""; $("#parts-dlg").hidden = false; };
-$("#pd-close").onclick = () => { $("#parts-dlg").hidden = true; };
-$("#parts-dlg").addEventListener("click", e => { if (e.target.id === "parts-dlg") $("#pd-close").click(); });
-
 /* ------------------------------------------------------------ 1.7：旋律譜圖片 */
 (() => {
   const sel = $("#sd-tonic");
@@ -1131,7 +965,6 @@ let sheetFirst = "";
 $("#sheet-open").onclick = () => {
   if (!S.song) return;
   $("#sd-key-v").textContent = S.key ? `KEY ${S.key > 0 ? "+" : ""}${S.key}` : "原調";
-  $("#sd-parts").checked = !!S.parts; $("#sd-parts").disabled = !S.parts;
   $("#sd-msg").textContent = ""; $("#sd-show").hidden = true;
   $("#sheet-dlg").hidden = false;
 };
@@ -1140,12 +973,11 @@ $("#sd-go").onclick = async () => {
   const btn = $("#sd-go"), msg = $("#sd-msg");
   btn.disabled = true; msg.textContent = "產生中…"; $("#sd-show").hidden = true;
   try {
-    const lines = S.lines.map(l => ({ t: l.t, end: l.end, text: l.text, p: l.part || "",
+    const lines = S.lines.map(l => ({ t: l.t, end: l.end, text: l.text,
       chars: (l.chars || []).filter(u => !isPunct(u.c)).map(u => ({ c: u.c, t: u.t })) }));
     const r = await api(`/api/songs/${S.song.id}/sheet`, { json: {
       title: S.song.title, artist: S.song.artist || "", key: $("#sd-key").checked ? S.key : 0,
-      layout: $("#sd-layout").value, notation: $("#sd-notation").value, tonic: $("#sd-tonic").value,
-      parts: $("#sd-parts").checked && !!S.parts, names: S.parts?.names, lines } });
+      layout: $("#sd-layout").value, notation: $("#sd-notation").value, tonic: $("#sd-tonic").value, lines } });
     sheetFirst = r.files[0] || "";
     msg.textContent = `已存 ${r.files.length} 張圖片${r.tonic ? `（1 = ${r.tonic}）` : ""}到「下載」資料夾：${r.folder}`;
     $("#sd-show").hidden = !sheetFirst;
@@ -1244,7 +1076,6 @@ function renderFaders() {
     inp.oninput = () => {
       S.vol[tr.k] = +inp.value; out.textContent = Math.round(S.vol[tr.k] * 100);
       if (S.nodes[tr.k]) S.nodes[tr.k].g.gain.value = S.vol[tr.k];
-      if (tr.k === "lead") syncPartVol();
       syncNormUi();
       saveSongPrefs();
     };
@@ -1254,7 +1085,6 @@ function renderFaders() {
 $$("[data-preset]").forEach(b => (b.onclick = () => {
   Object.assign(S.vol, PRESETS[b.dataset.preset]);
   for (const k of Object.keys(S.vol)) if (S.nodes[k]) S.nodes[k].g.gain.value = S.vol[k];
-  syncPartVol();
   syncNormUi();
   renderFaders(); saveSongPrefs();
 }));
@@ -1369,7 +1199,6 @@ function setLines(text) {
   }
   for (const l of timed) if (l.chars) fillCharTimes(l);
   S.lines = timed;
-  applyParts();
   // 沒有逐字時間的句子先自動分配（只用於顯示，不寫回歌詞，除非使用者調整或按「自動分配」）
   S.lines.forEach((l, i) => { if (!l.chars) { l.chars = distributeChars(l, lineLimit(i)); l.autoChars = true; } });
   S.dirty = true;
@@ -2096,11 +1925,10 @@ $("#judge-on").onchange = e => setJudge(e.target.checked, false);
 $("#judge-btn").onclick = () => setJudge(!JG.on, true);
 function judgeReset() { JG.done.clear(); JG.combo = 0; JG.tally = { perfect: 0, great: 0, good: 0, miss: 0 }; $("#judge").innerHTML = ""; }
 function judgePhrases() {   // 有歌詞用每一句；沒有歌詞用旋律的樂句
-  const mine = l => !S.parts || S.partMode === "all" || !l.part || l.part === "b" || l.part === S.partMode;   // 1.7：男女對唱只評自己的句子
-  const key = (S.lines.length ? S.lines.map(l => l.t + ":" + l.end + (mine(l) ? "" : "x")).join(",") : "n" + S.notes.length) + S.partMode;
+  const key = S.lines.length ? S.lines.map(l => l.t + ":" + l.end).join(",") : "n" + S.notes.length;
   if (JG.phrKey === key && JG.phr) return JG.phr;
   let out = [];
-  if (S.lines.length) out = S.lines.filter(mine).map(l => ({ s: l.t, e: Math.max(l.end || l.t + 1, l.t + 0.5) }));
+  if (S.lines.length) out = S.lines.map(l => ({ s: l.t, e: Math.max(l.end || l.t + 1, l.t + 0.5) }));
   else for (const n of S.notes) {
     const p = out[out.length - 1];
     if (p && n.s - p.e < 0.6) p.e = n.e; else out.push({ s: n.s, e: n.e });
@@ -2705,7 +2533,7 @@ const cv = $("#roll");
 let colors = {};
 function readColors() {
   const cs = getComputedStyle(document.documentElement);
-  for (const k of ["bg", "panel", "ink", "muted", "line", "lane", "lane-k", "melody", "voice", "good", "bad", "accent", "shade", "part-m", "part-f", "part-b"]) colors[k] = cs.getPropertyValue(`--${k}`).trim();
+  for (const k of ["bg", "panel", "ink", "muted", "line", "lane", "lane-k", "melody", "voice", "good", "bad", "accent", "shade"]) colors[k] = cs.getPropertyValue(`--${k}`).trim();
 }
 readColors();
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { readColors(); S.dirty = true; });
@@ -2786,7 +2614,7 @@ function draw() {
     if (n.e < G.left || n.s > t1) continue;
     const m = n.m + S.key, x0 = G.x(n.s), x1 = G.x(n.e), y = G.y(m);
     const active = G.t >= n.s && G.t < n.e;
-    g.fillStyle = partColor(n.part); g.globalAlpha = blocksOnly ? (active ? 0.95 : 0.6) : (active ? 0.5 : 0.22);
+    g.fillStyle = C.melody; g.globalAlpha = blocksOnly ? (active ? 0.95 : 0.6) : (active ? 0.5 : 0.22);
     roundRect(g, x0, y - G.rowH * 0.42, Math.max(2, x1 - x0 - (blocksOnly ? 2 : 0)), G.rowH * 0.84, 3); g.fill();
     g.globalAlpha = 1;
     if (x1 - x0 > (blocksOnly ? 20 : 30) && G.rowH > 11) {
@@ -2833,7 +2661,7 @@ function draw() {
     if (l.end < G.left || l.t > t1) continue;
     const x = G.x(l.t);
     S.lineHits.push({ x, line: l });
-    g.fillStyle = S.editLyr ? C.melody : l.part && S.parts ? partColor(l.part) : C.muted;
+    g.fillStyle = S.editLyr ? C.melody : C.muted;
     g.fillRect(x - (S.editLyr ? 1 : 0), 2, S.editLyr ? 3 : 1, TOP - 4);
     g.fillStyle = C.muted;
     g.save(); g.beginPath(); g.rect(x, 0, Math.max(0, G.x(l.end) - x + 40), TOP); g.clip();
@@ -3084,7 +2912,6 @@ function frame() {
     S.dirty = true;
   }
   micFrame();
-  if (S.playing) partGates(false);
   overlaySync();
   tpSync();
   if (S.dirty && !$("#view-practice").hidden) {

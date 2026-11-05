@@ -1754,16 +1754,12 @@ def step_separate(d: Path, cfg: dict, report) -> None:
         separate_dsp(d, report)
     for old in [*d.glob("v_*"), *d.glob("v2_*")]:
         shutil.rmtree(old, ignore_errors=True)
-    for k in ("male", "female"):   # 1.7：男女聲軌是從舊的主唱分出來的，重新分軌後就對不上了
-        for ext in (".flac", ".wav"):
-            (d / f"{k}{ext}").unlink(missing_ok=True)
     acap = is_acapella(d)   # 要讀音訊，先在鎖外面算好
     with _META_LOCK:   # 讀出到寫回之間不讓別的執行緒改這首歌的資料
         meta = read_meta(d)
         meta["steps"]["separate"] = True
         meta["separation"] = method
         meta["acapella"] = acap
-        meta["parts_stems"] = False
         meta["notes"] = [x for x in meta.get("notes", []) if "分離" not in x] + notes
         write_meta(d, meta)
 
@@ -2441,7 +2437,7 @@ def step_variant(d: Path, key: int, speed: float, report) -> None:
     vd.mkdir(exist_ok=True)
     for old in d.glob("v_k*"):   # 1.3 以前產生的版本（時間會漂移），用不到了
         shutil.rmtree(old, ignore_errors=True)
-    todo = [s for s in variant_stems(d) if not stem_path(vd, s).exists()]
+    todo = [s for s in STEMS if not stem_path(vd, s).exists()]
     if not todo:
         return
     label = f"移調 {key:+d}、速度 {int(speed * 100)}%"
@@ -2473,14 +2469,9 @@ def step_variant(d: Path, key: int, speed: float, report) -> None:
     report(f"{label}：完成", 1.0)
 
 
-def variant_stems(d: Path) -> tuple:
-    """要移調的音軌：主唱／合音／伴奏，有做男女聲分離的歌再加上男聲、女聲兩軌（1.7）。"""
-    return STEMS + tuple(s for s in ("male", "female") if stem_path(d, s).exists())
-
-
 def variant_ready(d: Path, key: int, speed: float) -> bool:
     vd = variant_dir(d, key, speed)
-    return all(stem_path(vd, s).exists() for s in variant_stems(d))
+    return all(stem_path(vd, s).exists() for s in STEMS)
 
 
 # ---------------------------------------------------------------- 錄音評分

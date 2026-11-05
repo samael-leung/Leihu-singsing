@@ -19,7 +19,6 @@ from flask import Flask, abort, jsonify, request, send_file, send_from_directory
 import claude_api as C
 import pipeline as P
 import share as SH
-import duet as DU   # 1.7：男女對唱分聲部
 import score_sheet as SS   # 1.7：旋律譜匯出
 
 VERSION = "1.7.0"
@@ -454,8 +453,6 @@ def song(sid):
     meta["norm_target"] = P.TARGET_LUFS
     meta["norm_range"] = [P.NORM_MIN_DB, P.NORM_MAX_DB]
     meta["takes"] = P.list_takes(d)
-    meta["parts_stems"] = DU.stems_ready(d)
-    meta["parts_model"] = DU.model_ready()
     return jsonify(meta)
 
 
@@ -533,37 +530,6 @@ def queue_max(sid: str) -> str:
         except Exception as e:
             P.log_error("queue_max prerender", e)
     return jobs.submit("process", sid, run, label="max")
-
-
-@app.get("/api/songs/<sid>/parts")
-def get_parts(sid):
-    d = P.song_dir(sid)
-    data = DU.load_parts(d)
-    return jsonify(parts=data, stems=DU.stems_ready(d), model=DU.model_ready(), gpu=P.cuda_ok())
-
-
-@app.post("/api/songs/<sid>/parts/analyze")
-def analyze_parts(sid):
-    """男女對唱：分開男女聲（可選）並判斷每句是誰唱的。排進處理佇列。"""
-    d = P.song_dir(sid)
-    meta = P.read_meta(d)
-    if not meta.get("steps", {}).get("separate") or not meta.get("steps", {}).get("pitch"):
-        raise P.UserError("這首歌還沒處理完（分軌、旋律分析），處理完再分聲部")
-    use_model = bool((request.get_json(force=True) or {}).get("model", True))
-    if use_model and not P.module_status()["uvr"]:
-        raise P.UserError("沒有安裝 AI 人聲分離元件，只能用音高判斷每句是誰唱的")
-    label = "parts" + ("+mf" if use_model else "")
-    jid = jobs.find("process", sid, label) or jobs.submit("process", sid, DU.job(sid, use_model), label=label)
-    return jsonify(job=jid)
-
-
-@app.post("/api/songs/<sid>/parts")
-def save_parts(sid):
-    d = P.song_dir(sid)
-    body = request.get_json(force=True) or {}
-    if not isinstance(body.get("lines"), list):
-        raise P.UserError("格式不正確")
-    return jsonify(parts=DU.save_manual(d, body["lines"], body.get("names")))
 
 
 @app.post("/api/songs/<sid>/sheet")
@@ -745,7 +711,7 @@ def storage_compact():
 @app.get("/api/songs/<sid>/audio/<stem>")
 def audio(sid, stem):
     d = P.song_dir(sid)
-    if stem not in P.STEMS + ("mix",) + DU.PART_STEMS:
+    if stem not in P.STEMS + ("mix",):
         abort(404)
     key, speed = _key_speed()
     base = d if stem == "mix" else P.variant_dir(d, key, speed)
@@ -1493,6 +1459,38 @@ def watch_parent() -> None:
     threading.Thread(target=wait, daemon=True).start()
 
 
+def remove_duet_leftovers() -> None:
+    """1.7.0 測試版的「男女對唱」已經拿掉：清掉它留下的模型（約 530 MB）、每首歌的男聲／女聲軌與聲部標記。"""
+    import shutil
+    for pat in ("model_chorus_bs_roformer_ep_267_sdr_24.1275.ckpt*", "config_chorus_male_female_bs_roformer.yaml*"):
+        for f in P.MODELS.glob(pat):
+            try:
+                f.unlink()
+            except OSError:
+                pass
+    try:
+        dirs = [d for d in P.LIB.iterdir() if d.is_dir()]
+    except OSError:
+        return
+    for d in dirs:
+        found = False
+        for f in [*d.glob("male.*"), *d.glob("female.*"), *d.glob("parts.json"), *d.glob("v*/male.*"), *d.glob("v*/female.*")]:
+            try:
+                f.unlink() if f.is_file() else shutil.rmtree(f, ignore_errors=True)
+                found = True
+            except OSError:
+                pass
+        if found and (d / "meta.json").exists():
+            try:
+                with P._META_LOCK:
+                    m = P.read_meta(d)
+                    if "parts_stems" in m:
+                        m.pop("parts_stems", None)
+                        P.write_meta(d, m)
+            except Exception as e:
+                P.log_error("remove_duet_leftovers", e)
+
+
 def loudness_backfill() -> None:
     """舊歌曲在背景補量各音軌組合的響度（每首約 2～3 秒）。
     有處理工作在跑時先暫停，不和分軌、辨識搶資源；沒補到的歌第一次開啟時會當場量。"""
@@ -1608,6 +1606,7 @@ def main():
     resume_downloads()
     threading.Thread(target=prefetcher, daemon=True, name="prefetch").start()
     threading.Thread(target=loudness_backfill, daemon=True, name="loudness").start()
+    threading.Thread(target=remove_duet_leftovers, daemon=True, name="cleanup").start()
     threading.Thread(target=check_update, daemon=True, name="update").start()
     url = f"http://{HOST}:{PORT}"
     print(f"\n  {P.APP_NAME} {VERSION} 已啟動：{url}\n  關閉這個視窗就會結束程式。\n")

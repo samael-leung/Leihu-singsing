@@ -146,20 +146,6 @@
           <span id="mx-msg" class="hint">依目前的 KEY、速度和主唱／合音／伴奏音量（含音量標準化）匯出；把主唱拉到 0 就是伴奏。不含導引音和你的錄音。</span>
         </div>
         <p class="hint">「練唱」會把主唱調小、打開旋律導引音。移調和變速在本機算好後會存起來，下次切換不用再等。</p>
-        <div id="parts-box" class="parts-box">
-          <div class="row">
-            <b>男女對唱</b>
-            <select id="part-mode" aria-label="男女對唱：要唱哪一邊" disabled>
-              <option value="all">兩邊都播放</option><option value="m">我唱男聲</option><option value="f">我唱女聲</option>
-            </select>
-            <button id="parts-edit" class="ghost" disabled>每句聲部…</button>
-          </div>
-          <div class="row">
-            <button id="parts-run" title="把主唱分成男聲、女聲兩軌（第一次要下載約 530 MB 的模型），再判斷每句是誰唱、哪幾句一起唱">AI 分析男女聲部</button>
-            <button id="parts-pitch" class="ghost" title="不分離聲音，只依每句的音高判斷男聲或女聲（幾秒就好；一起唱的句子沒辦法只留一邊）">只用音高判斷</button>
-          </div>
-          <span id="parts-msg" class="hint">男女合唱的歌：選「我唱男聲」，男聲的句子會自動靜音，一起唱的句子只留女聲，反過來也一樣。</span>
-        </div>
       </div>
 
       <div class="panel">
@@ -435,23 +421,6 @@
   </div>
 </div>
 
-<div id="parts-dlg" class="modal" hidden>
-  <div class="sheet parts-sheet" role="dialog" aria-modal="true" aria-labelledby="pd-title">
-    <h1 id="pd-title">每句聲部</h1>
-    <p class="hint">自動判斷不對的句子，點一下改成正確的聲部，會自動儲存。點時間可以跳到那一句。標「?」的是比較沒把握的句子。</p>
-    <div class="pd-names">
-      <label><i class="sw part-m"></i><input id="pd-name-m" type="text" maxlength="12" aria-label="男聲的名稱"></label>
-      <label><i class="sw part-f"></i><input id="pd-name-f" type="text" maxlength="12" aria-label="女聲的名稱"></label>
-      <span class="hint">兩個男生或兩個女生合唱時，可以改成兩人的名字</span>
-    </div>
-    <div id="pd-list" class="pd-list"></div>
-    <div class="row" style="justify-content:space-between">
-      <span id="pd-msg" class="hint"></span>
-      <button id="pd-close" class="ghost">關閉</button>
-    </div>
-  </div>
-</div>
-
 <div id="sheet-dlg" class="modal" hidden>
   <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sd-title">
     <h1 id="sd-title">匯出旋律譜圖片</h1>
@@ -465,8 +434,6 @@
       <select id="sd-tonic"><option value="auto" selected>自動判斷</option></select>
       <label for="sd-key">KEY</label>
       <label class="row"><input id="sd-key" type="checkbox" checked> 套用目前的 KEY（<span id="sd-key-v"></span>）</label>
-      <label for="sd-parts">聲部</label>
-      <label class="row"><input id="sd-parts" type="checkbox"> 依男女聲部上色</label>
     </div>
     <span class="hint">旋律是從原唱自動分析的，沒有節拍資訊，所以用時間位置排版，不是正式的五線譜或簡譜節奏。</span>
     <div class="row"><button id="sd-go" class="primary">匯出</button><button id="sd-show" class="ghost" hidden>顯示檔案</button><span id="sd-msg" class="hint"></span></div>
