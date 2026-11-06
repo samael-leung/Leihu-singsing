@@ -224,6 +224,35 @@ function songMatches(s) {
     s.lyrics_online && s.lyrics_online.artist].filter(Boolean).join(" ").toLowerCase();
   return LIB.q.split(/\s+/).every(w => hay.includes(w));
 }
+/* 抽歌：從目前分類／搜尋結果裡、處理好（有旋律）的歌隨機抽一首，轉一下名字再進練唱 */
+let drawLast = null, drawing = false;
+$("#lib-draw").onclick = () => {
+  if (drawing) return;
+  let pool = LIB.songs.filter(s => songMatches(s) && (s.steps || {}).pitch);
+  if (!pool.length) return toast(LIB.q || LIB.cur !== "__all__" ? "目前顯示的歌裡沒有處理好的歌可以抽" : "歌曲庫裡還沒有處理好的歌");
+  if (pool.length > 1) pool = pool.filter(s => s.id !== drawLast);   // 不連續抽到同一首
+  const pick = pool[Math.floor(Math.random() * pool.length)];
+  const name = s => s.title + (s.artist ? ` － ${s.artist}` : "");
+  drawing = true; $("#lib-draw").disabled = true;
+  const t = $("#toast"); t.hidden = false; clearTimeout(toastTimer);
+  let n = 0;
+  const spin = () => {   // 越轉越慢，最後停在抽到的歌
+    if (n < 14 && pool.length > 1) {
+      t.textContent = "抽歌中… " + name(pool[Math.floor(Math.random() * pool.length)]);
+      setTimeout(spin, 40 + n++ * 12);
+      return;
+    }
+    t.textContent = "抽到：" + name(pick);
+    drawLast = pick.id;
+    setTimeout(() => {
+      drawing = false; $("#lib-draw").disabled = false;
+      toastTimer = setTimeout(() => (t.hidden = true), 2500);
+      openSong(pick.id);
+    }, 700);
+  };
+  spin();
+};
+
 function renderSongs() {
   const box = $("#songs");
   box.innerHTML = "";
