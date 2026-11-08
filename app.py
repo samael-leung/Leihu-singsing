@@ -1271,7 +1271,8 @@ def overlay_set():
             OVERLAY["lines"] = d["lines"] if isinstance(d["lines"], list) else []
         if "lines" in d or d.get("sid") != OVERLAY["sid"]:
             OVERLAY["ver"] += 1
-        OVERLAY.update(sid=d.get("sid"), title=str(d.get("title") or ""), t=float(d.get("t") or 0),
+        OVERLAY.update(sid=d.get("sid"), title=str(d.get("title") or ""), artist=str(d.get("artist") or ""),
+                       key=int(d.get("key") or 0), t=float(d.get("t") or 0),
                        playing=bool(d.get("playing")), rate=float(d.get("rate") or 1),
                        color=bool(d.get("color", True)), at=time.time())
     return jsonify(ok=True)
@@ -1282,11 +1283,58 @@ def overlay_get():
     with _ov_lock:
         o = dict(OVERLAY)
     t = o["t"] + ((time.time() - o["at"]) * o["rate"] if o["playing"] else 0)
-    out = {"sid": o["sid"], "title": o["title"], "t": t, "playing": o["playing"], "rate": o["rate"],
+    out = {"sid": o["sid"], "title": o["title"], "artist": o.get("artist", ""), "key": o.get("key", 0),
+           "t": t, "playing": o["playing"], "rate": o["rate"],
            "color": o["color"], "ver": o["ver"]}
     if request.args.get("ver") != str(o["ver"]):
         out["lines"] = o["lines"]
     return jsonify(out)
+
+
+# ---------------------------------------------------------------- 本場歌單（1.7）
+SETLIST_PATH = P.ROOT / "setlist.json"
+_SETLIST_LOCK = threading.Lock()
+SETLIST_GAP = 6 * 3600   # 距離上一首超過 6 小時就當成新的一場
+
+
+def _setlist_read() -> dict:
+    try:
+        d = json.loads(SETLIST_PATH.read_text("utf-8"))
+        if isinstance(d.get("items"), list):
+            return d
+    except (OSError, ValueError):
+        pass
+    return {"started": None, "items": []}
+
+
+@app.get("/api/setlist")
+def setlist_get():
+    with _SETLIST_LOCK:
+        return jsonify(_setlist_read())
+
+
+@app.post("/api/setlist/add")
+def setlist_add():
+    b = request.get_json(force=True) or {}
+    now = time.time()
+    item = {"t": now, "id": str(b.get("id", ""))[:20], "title": str(b.get("title", ""))[:200],
+            "artist": str(b.get("artist", ""))[:120], "key": int(b.get("key") or 0)}
+    with _SETLIST_LOCK:
+        d = _setlist_read()
+        if not d["items"] or now - d["items"][-1]["t"] > SETLIST_GAP:
+            d = {"started": now, "items": []}
+        last = d["items"][-1] if d["items"] else None
+        if not (last and last["id"] == item["id"] and now - last["t"] < 600):   # 同一首十分鐘內不重複記
+            d["items"].append(item)
+        P.atomic_write_text(SETLIST_PATH, json.dumps(d, ensure_ascii=False))
+    return jsonify(ok=True)
+
+
+@app.post("/api/setlist/clear")
+def setlist_clear():
+    with _SETLIST_LOCK:
+        P.atomic_write_text(SETLIST_PATH, json.dumps({"started": None, "items": []}))
+    return jsonify(ok=True)
 
 
 @app.post("/api/open-overlay")

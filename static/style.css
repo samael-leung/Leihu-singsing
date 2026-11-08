@@ -387,7 +387,7 @@ a.tab { text-decoration: none; font-size: 14px; }
 body.live main { max-width: none; padding: 10px 12px; display: grid; grid-template-columns: minmax(240px, 300px) minmax(0, 1fr); gap: 12px;
   height: calc(100vh - 56px); box-sizing: border-box; }
 body.live #view-lib { display: flex; flex-direction: column; min-height: 0; }
-body.live #view-lib > :not(.lib-tools):not(#songs) { display: none !important; }
+body.live #view-lib > :not(.lib-tools):not(#songs):not(#live-queue) { display: none !important; }
 body.live .lib-tools { flex-direction: column; align-items: stretch; gap: 6px; margin: 0 0 6px; }
 body.live .lib-tools .lib-right { display: flex; flex-wrap: wrap; gap: 6px; }
 body.live .lib-tools .lib-right input { flex: 1 1 100%; order: -1; }
@@ -416,3 +416,22 @@ body.live .live-bar .row { flex-wrap: wrap; gap: 6px; align-items: center; }
 .lv-vol { display: inline-flex; align-items: center; gap: 6px; margin-left: 8px; }
 .lv-vol input { width: 160px; }
 @media (max-width: 760px) { body.live main { grid-template-columns: 1fr; height: auto; } body.live #songs { max-height: 30vh; } }
+
+/* 待唱清單、前奏倒數 */
+.live-queue { display: none; }
+body.live .live-queue { display: grid; gap: 4px; margin-bottom: 8px; padding: 8px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+body.live .live-queue .row { gap: 6px; align-items: center; }
+.lq-list { display: grid; gap: 2px; max-height: 24vh; overflow: auto; }
+.lq-item { display: grid; grid-template-columns: 1.6em minmax(0, 1fr) auto; align-items: center; gap: 4px; font-size: 13px; }
+.lq-item .n { color: var(--muted); font-family: var(--mono); font-size: 12px; }
+.lq-item .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lq-item button { padding: 0 8px; }
+.live-song { position: relative; padding-right: 36px; }
+.live-song .add { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 24px; height: 24px; border-radius: 6px;
+  display: grid; place-items: center; color: var(--accent); border: 1px solid var(--line); background: var(--panel); font-weight: 700; }
+.live-song .add:hover { background: var(--accent); color: var(--accent-ink, #fff); }
+.lyr-count { position: absolute; left: 50%; top: 8px; transform: translateX(-50%); z-index: 2; min-width: 1.6em; padding: 0 .3em;
+  font: 800 calc(34px * var(--ls))/1.2 var(--sans); color: var(--melody); text-align: center; pointer-events: none; }
+.lyr-count.pulse { animation: cpulse .9s ease-out; }
+@keyframes cpulse { 0% { transform: translateX(-50%) scale(1.5); opacity: .3; } 30% { transform: translateX(-50%) scale(1); opacity: 1; } }
+body.live .lyr-count { font-size: calc(48px * var(--ls)); }

@@ -265,6 +265,138 @@ $("#lv-minus").onclick = () => liveAdjust("cur", -0.1);
 $("#lv-plus").onclick = () => liveAdjust("cur", 0.1);
 $("#lv-pop").onclick = () => $("#timing-pop").click();
 
+/* 直播模式的操作（畫面按鈕和 Ctrl+Alt 全域快捷鍵共用） */
+function liveAction(act) {
+  if (act === "next-song") return queueNext();
+  if (!S.song) return toast("還沒選歌");
+  if (act === "play") return S.playing || S.wantPlay ? pause() : play();
+  if (act === "now") return liveAdjust("cur");
+  if (act === "next-line") return liveAdjust("next");
+  if (act === "minus") return liveAdjust("cur", -0.1);
+  if (act === "plus") return liveAdjust("cur", 0.1);
+  if (act === "mode") {
+    const k = (S.vol.lead ?? 1) >= 0.5 ? "karaoke" : "orig";
+    $(`[data-preset="${k}"]`).click();
+    return toast(k === "karaoke" ? "卡拉OK（關掉原唱）" : "原曲", 1500);
+  }
+  if (act === "key-up" || act === "key-down") {
+    const sel = $("#key-sel"), v = clamp(S.key + (act === "key-up" ? 1 : -1), -6, 6);
+    if (v === S.key) return;
+    sel.value = String(v); sel.dispatchEvent(new Event("change"));
+    return toast(`KEY ${v > 0 ? "+" : ""}${v}`, 1500);
+  }
+}
+window.liveHotkey = act => { try { liveAction(act); } catch (e) { console.error(e); } };
+
+/* 待唱清單：存在這台電腦的瀏覽器資料裡 */
+LIVE.queue = store.get("liveQueue", []);
+function saveQueue() { store.set("liveQueue", LIVE.queue); renderQueue(); }
+function songById(id) { return LIB.songs.find(s => s.id === id); }
+function renderQueue() {
+  LIVE.queue = LIVE.queue.filter(id => songById(id) || !LIB.songs.length);
+  const box = $("#lq-list");
+  box.innerHTML = "";
+  LIVE.queue.forEach((id, i) => {
+    const s = songById(id); if (!s) return;
+    const row = document.createElement("div");
+    row.className = "lq-item";
+    row.innerHTML = `<span class="n">${i + 1}</span><span class="t"></span><button class="ghost" title="從清單移除">×</button>`;
+    $(".t", row).textContent = s.title + (s.artist ? ` － ${s.artist}` : "");
+    $("button", row).onclick = () => { LIVE.queue.splice(i, 1); saveQueue(); };
+    box.appendChild(row);
+  });
+  $("#lq-n").textContent = LIVE.queue.length ? `${LIVE.queue.length} 首` : "";
+  $("#lq-hint").hidden = LIVE.queue.length > 0;
+  $("#lq-next").disabled = !LIVE.queue.length;
+}
+function queueAdd(id) {
+  if (LIVE.queue.includes(id)) return toast("已經在待唱清單裡了", 1500);
+  LIVE.queue.push(id); saveQueue();
+  toast(`已加入待唱清單（第 ${LIVE.queue.length} 首）`, 1500);
+}
+async function queueNext() {
+  const id = LIVE.queue.shift();
+  if (!id) return toast("待唱清單是空的");
+  saveQueue();
+  pause();
+  await openSong(id);
+  renderSongs();
+  toast(`已載入：${S.song.title}，按播放開始`, 3000);
+}
+$("#lq-next").onclick = () => queueNext();
+$("#lq-clear").onclick = () => { if (LIVE.queue.length && confirm("清空待唱清單？")) { LIVE.queue = []; saveQueue(); } };
+/* 快唱完時先在背景準備下一首的 KEY 版本，切歌不用等轉換 */
+function songKeyFor(s) {
+  const saved = store.get(`song:${s.id}`, {});
+  const useDefault = s.key_set_at && !(saved.at > s.key_set_at * 1000);
+  return { key: clamp((useDefault ? s.key : saved.key) || 0, -6, 6), speed: useDefault ? 1 : saved.speed || 1 };
+}
+function queuePrefetch(t) {
+  const id = LIVE.queue[0];
+  if (!LIVE.on || !id || LIVE.prefetched === id || !S.dur || S.dur - t > 45) return;
+  LIVE.prefetched = id;
+  const s = songById(id); if (!s) return;
+  api(`/api/songs/${id}/variant`, { json: songKeyFor(s) }).catch(() => {});
+}
+function queueAtEnd() {   // 一首唱完：自動載入清單的下一首（不自動播放）
+  if (!LIVE.on || !LIVE.queue.length) return;
+  setTimeout(() => { if (!S.playing) queueNext(); }, 1500);
+}
+
+/* 前奏倒數：第一句前、或長間奏之後，下一句開口前 3 秒顯示 3、2、1 */
+function updateCountdown(t) {
+  const el = $("#lyr-count");
+  let show = "";
+  if (S.playing && S.lines.length) {
+    const k = lineIndexAt(t) + 1;
+    if (k < S.lines.length) {
+      const prevEnd = k > 0 ? (S.lines[k - 1].end || S.lines[k - 1].t) : 0;
+      const dt = (S.lines[k].t - t) / (S.speed || 1);
+      if (dt > 0 && dt <= 3 && (k === 0 || S.lines[k].t - prevEnd >= 5)) show = String(Math.ceil(dt));
+    }
+  }
+  if (el.textContent !== show) { el.textContent = show; el.hidden = !show; if (show) { el.classList.remove("pulse"); void el.offsetWidth; el.classList.add("pulse"); } }
+}
+
+/* 本場歌單：直播模式下播放超過 30 秒就記一筆 */
+LIVE.played = 0; LIVE.logged = null; LIVE.lastTick = 0;
+function setlistTick(t) {
+  const now = performance.now();
+  const dt = LIVE.lastTick ? Math.min(0.5, (now - LIVE.lastTick) / 1000) : 0;
+  LIVE.lastTick = now;
+  if (!LIVE.on || !S.playing || !S.song) return;
+  if (LIVE.logged === S.song.id) return;
+  LIVE.played += dt;
+  if (LIVE.played < 30) return;
+  LIVE.logged = S.song.id;
+  api("/api/setlist/add", { json: { id: S.song.id, title: S.song.title, artist: S.song.artist || "", key: S.key } }).catch(() => {});
+}
+async function openSetlist() {
+  try {
+    const r = await api("/api/setlist");
+    const d = r.started ? new Date(r.started * 1000) : new Date();
+    const head = `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")} 歌單`;
+    const lines = r.items.map((x, i) => {
+      const tm = new Date(x.t * 1000);
+      return `${i + 1}. ${String(tm.getHours()).padStart(2, "0")}:${String(tm.getMinutes()).padStart(2, "0")} ${x.title}${x.artist ? ` － ${x.artist}` : ""}${x.key ? `（KEY ${x.key > 0 ? "+" : ""}${x.key}）` : ""}`;
+    });
+    $("#sl-text").value = r.items.length ? [head, ...lines].join("\n") : "這場還沒有唱過的歌。";
+    $("#setlist-dlg").hidden = false;
+  } catch (e) { toast(e.message); }
+}
+$("#lv-setlist").onclick = openSetlist;
+$("#sl-copy").onclick = async () => {
+  try { await navigator.clipboard.writeText($("#sl-text").value); toast("已複製", 1500); }
+  catch { $("#sl-text").select(); document.execCommand("copy"); toast("已複製", 1500); }
+};
+$("#sl-new").onclick = async () => {
+  if (!confirm("清空本場歌單，開始新的一場？")) return;
+  await api("/api/setlist/clear", { json: {} }).catch(e => toast(e.message));
+  LIVE.logged = null; openSetlist();
+};
+$("#sl-close").onclick = () => { $("#setlist-dlg").hidden = true; };
+$("#setlist-dlg").addEventListener("click", e => { if (e.target.id === "setlist-dlg") $("#sl-close").click(); });
+
 /* 抽歌：從目前分類／搜尋結果裡、處理好（有旋律）的歌隨機抽一首，轉一下名字再進練唱 */
 let drawLast = null, drawing = false;
 $("#lib-draw").onclick = () => {
@@ -307,10 +439,13 @@ function renderLiveSongs(box, list) {
     el.className = "live-song" + (S.song && S.song.id === s.id ? " cur" : "");
     el.disabled = !ok;
     el.title = ok ? "開始這首" : "還沒處理好";
-    el.innerHTML = `<span class="t"></span><span class="a"></span>`;
+    el.innerHTML = `<span class="t"></span><span class="a"></span>${ok ? `<span class="add" role="button" title="加進待唱清單">＋</span>` : ""}`;
     $(".t", el).textContent = s.title;
     $(".a", el).textContent = [s.artist, s.key ? `KEY ${s.key > 0 ? "+" : ""}${s.key}` : ""].filter(Boolean).join("・");
-    el.onclick = () => openSong(s.id).then(() => renderSongs());
+    el.onclick = e => {
+      if (e.target.classList.contains("add")) { e.stopPropagation(); return queueAdd(s.id); }
+      openSong(s.id).then(() => renderSongs());
+    };
     frag.appendChild(el);
   }
   box.appendChild(frag);
@@ -324,7 +459,7 @@ function renderSongs() {
     return;
   }
   const list = LIB.songs.filter(songMatches);
-  if (window.LIVE && LIVE.on) return renderLiveSongs(box, list);
+  if (window.LIVE && LIVE.on) { renderQueue(); return renderLiveSongs(box, list); }
   const inCat = s => !(LIB.cur === "__none__" && s.category) && (LIB.cur === "__all__" || LIB.cur === "__none__" || s.category === LIB.cur);
   const sim = LIB.q ? LIB.similar.map(id => LIB.songs.find(s => s.id === id)).filter(s => s && inCat(s) && !list.includes(s)) : [];
   if (!list.length && !sim.length) {
@@ -803,6 +938,7 @@ async function openSong(id) {
     api(`/api/songs/${id}`), api(`/api/songs/${id}/pitch`), api(`/api/songs/${id}/lyrics`),
   ]);
   S.song = song; titles[id] = song.title; syncGroupBtn();
+  if (window.LIVE) { LIVE.played = 0; LIVE.logged = null; }
   S.pitch = { hop: pitch.hop, midi: Float32Array.from(pitch.midi, v => (v == null ? NaN : v)) };
   S.notes = pitch.notes.map(([s, e, m]) => ({ s, e, m }));
   S.autoLrc = lyr.auto;
@@ -2954,12 +3090,12 @@ function overlaySync() {
   const now = performance.now();
   const active = !$("#view-practice").hidden && S.song;
   const t = active ? cur() : 0;
-  const st = { sid: active ? S.song.id : null, playing: !!(active && S.playing), rate: S.speed || 1, color: !!S.charColor };
+  const st = { sid: active ? S.song.id : null, playing: !!(active && S.playing), rate: S.speed || 1, color: !!S.charColor, key: active ? S.key : 0 };
   const prev = OV.sent;
-  const changed = !prev || prev.sid !== st.sid || prev.playing !== st.playing || prev.rate !== st.rate || prev.color !== st.color
+  const changed = !prev || prev.sid !== st.sid || prev.playing !== st.playing || prev.rate !== st.rate || prev.color !== st.color || prev.key !== st.key
     || Math.abs(t - (prev.t + (prev.playing ? (now - prev.at) / 1000 * prev.rate : 0))) > 0.25;
   if (OV.busy || (!changed && now - OV.last < (st.playing ? 2000 : 5000))) return;
-  const body = { ...st, t, title: active ? S.song.title : "" };
+  const body = { ...st, t, title: active ? S.song.title : "", artist: active ? S.song.artist || "" : "" };
   if (active) {
     const lines = JSON.stringify(S.lines.map(l => ({ t: l.t, end: l.end, text: l.text, c: (l.chars || []).map(c => c.t), r: kanaSegs(l.text) })));
     if (lines !== OV.lines) { body.lines = JSON.parse(lines); OV.lines = lines; }
@@ -2970,17 +3106,17 @@ function overlaySync() {
 }
 
 /* 直播歌詞設定視窗 */
-const OVO = store.get("overlayOpts", { lines: "2", size: 56, pos: "bottom", align: "center", font: "huninn", color: "#f0a04a", bg: "none" });
+const OVO = Object.assign({ info: "off" }, store.get("overlayOpts", { lines: "2", size: 56, pos: "bottom", align: "center", font: "huninn", color: "#f0a04a", bg: "none" }));
 function overlayUrl() {
-  const q = new URLSearchParams({ lines: OVO.lines, size: OVO.size, pos: OVO.pos, align: OVO.align, font: OVO.font || "huninn", color: OVO.color.replace("#", ""), bg: OVO.bg });
+  const q = new URLSearchParams({ lines: OVO.lines, size: OVO.size, pos: OVO.pos, align: OVO.align, font: OVO.font || "huninn", color: OVO.color.replace("#", ""), bg: OVO.bg, info: OVO.info || "off" });
   return `${location.origin}/overlay?${q}`;
 }
 function syncOverlayDlg() {
-  for (const k of ["lines", "size", "pos", "align", "font", "color", "bg"]) $("#ov-" + k).value = OVO[k] || $("#ov-" + k).value;
+  for (const k of ["lines", "size", "pos", "align", "font", "color", "bg", "info"]) $("#ov-" + k).value = OVO[k] || $("#ov-" + k).value;
   $("#ov-size-v").textContent = OVO.size;
   $("#ov-url").value = overlayUrl();
 }
-for (const k of ["lines", "size", "pos", "align", "font", "color", "bg"]) {
+for (const k of ["lines", "size", "pos", "align", "font", "color", "bg", "info"]) {
   $("#ov-" + k).addEventListener("input", e => { OVO[k] = k === "size" ? +e.target.value : e.target.value; store.set("overlayOpts", OVO); syncOverlayDlg(); });
 }
 $("#ov-open").onclick = () => { syncOverlayDlg(); $("#overlay-dlg").hidden = false; };
@@ -3002,17 +3138,19 @@ function frame() {
   if (S.playing) {
     const t = cur();
     if (S.loopA != null && S.loopB != null && t >= S.loopB) { S.t = S.loopA; S.live = []; JG.done.clear(); play(); if (S.rec) splitRecording(); }
-    else if (t >= S.dur) { pause(); S.t = S.dur; }
+    else if (t >= S.dur) { pause(); S.t = S.dur; queueAtEnd(); }
     S.dirty = true;
   }
   micFrame();
+  setlistTick(S.playing ? cur() : 0);
+  if (S.playing) queuePrefetch(cur());
   overlaySync();
   tpSync();
   if (S.dirty && !$("#view-practice").hidden) {
     S.dirty = false;
     const t = cur();
     if (S.showMel) draw();
-    updateLyrics(t); highlightTiming(t);
+    updateLyrics(t); highlightTiming(t); updateCountdown(t);
     const tt = `${fmt(t)} / ${fmt(S.dur || 0, 0)}`;
     if (tt !== lastTimeText) { $("#time").textContent = tt; lastTimeText = tt; }
     if (document.activeElement !== $("#seek")) $("#seek").value = String(t);
@@ -3124,6 +3262,7 @@ async function openSettings(focusUsage) {
   $("#cfg-lang").value = cfg.lyrics_language || "";
   $("#cfg-tw").checked = !!cfg.convert_to_taiwan;
   $("#cfg-autorec").checked = !!cfg.auto_recognize_lyrics;
+  $("#cfg-hotkeys").checked = cfg.global_hotkeys !== false;
   $("#cfg-font").value = cfg.font || "huninn";
   fillOutDevices(cfg.audio_out || "");
   $("#cfg-sep").value = cfg.separation_model;
@@ -3158,7 +3297,7 @@ async function saveSettings(extra = {}) {
     await api("/api/config", { json: {
       anthropic_api_key: $("#cfg-key").value, claude_model: $("#cfg-model").value.trim(),
       whisper_model: $("#cfg-whisper").value, lyrics_language: $("#cfg-lang").value,
-      convert_to_taiwan: $("#cfg-tw").checked, auto_recognize_lyrics: $("#cfg-autorec").checked, font: $("#cfg-font").value, audio_out: $("#cfg-out").value, separation_model: $("#cfg-sep").value.trim(),
+      convert_to_taiwan: $("#cfg-tw").checked, auto_recognize_lyrics: $("#cfg-autorec").checked, global_hotkeys: $("#cfg-hotkeys").checked, font: $("#cfg-font").value, audio_out: $("#cfg-out").value, separation_model: $("#cfg-sep").value.trim(),
       karaoke_model: $("#cfg-kara").value.trim(), karaoke_quality: $("#cfg-kq").value, karaoke_overlap: +$("#cfg-kov").value, auto_fine: $("#cfg-autofine").checked, pitch_model: $("#cfg-pitch").value,
       balance_usd: $("#cfg-balance").value.trim().replace(/^US\$|^\$/, ""), ...extra,
     } });

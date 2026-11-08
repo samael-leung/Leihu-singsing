@@ -51,10 +51,18 @@
   ruby { margin: 0 .06em; }
   .wrap.furi .ln { line-height: 1.95; }
   .now.plain .base { color: var(--fill); }
+  /* 1.7：曲目資訊條（正在唱：歌名 － 歌手／KEY） */
+  .info { position: fixed; display: none; align-items: center; gap: .6em; padding: .35em .9em; border-radius: .5em;
+    font: 700 calc(var(--size) * .36)/1.2 var(--font); color: #fff; background: rgba(0, 0, 0, .55); white-space: nowrap; max-width: 46vw; overflow: hidden; text-overflow: ellipsis; }
+  .info.on { display: flex; }
+  .info .k { color: var(--fill); font-size: .85em; }
+  .info .mark { color: var(--fill); }
+  .info-tl { top: 3vh; left: 3vw; } .info-tr { top: 3vh; right: 3vw; } .info-bl { bottom: 3vh; left: 3vw; } .info-br { bottom: 3vh; right: 3vw; }
 </style>
 </head>
 <body>
 <div class="wrap" id="wrap"></div>
+<div class="info" id="info"><span class="mark">♪</span><span class="tx"></span><span class="k"></span></div>
 <script>
 "use strict";
 const Q = new URLSearchParams(location.search);
@@ -68,6 +76,8 @@ document.body.classList.add("pos-" + (["top", "center", "bottom"].includes(Q.get
 document.body.classList.add("align-" + (Q.get("align") === "left" ? "left" : "center"));
 if (["green", "black"].includes(Q.get("bg"))) document.body.classList.add("bg-" + Q.get("bg"));
 if (["sans", "huninn"].includes(Q.get("font"))) document.body.classList.add("font-" + Q.get("font"));
+const INFO = ["tl", "tr", "bl", "br"].includes(Q.get("info")) ? Q.get("info") : "";
+if (INFO) document.getElementById("info").classList.add("info-" + INFO);
 
 // 依行數排版：1 行＝正在唱；2 行＝正在唱＋下一句；3 行＝上一句＋正在唱＋下一句；5 行＝上一句＋正在唱＋後三句
 const LAYOUT = { 1: [0], 2: [0, 1], 3: [-1, 0, 1], 5: [-1, 0, 1, 2, 3] }[NLINES];
@@ -91,6 +101,12 @@ async function poll() {
     const d = await r.json();
     if (d.lines) { ST.lines = d.lines; ST.ver = d.ver; rows.forEach(r => (r.text = null)); wrap.classList.toggle("furi", d.lines.some(l => l.r)); }
     ST.sid = d.sid; ST.color = d.color;
+    if (INFO) {
+      const el = document.getElementById("info");
+      el.classList.toggle("on", !!d.sid && !!d.title);
+      el.querySelector(".tx").textContent = d.title + (d.artist ? ` － ${d.artist}` : "");
+      el.querySelector(".k").textContent = d.key ? `KEY ${d.key > 0 ? "+" : ""}${d.key}` : "";
+    }
     const pred = nowT(), b = ST.base;
     // 播放中只在誤差夠大時才校正，避免上色抖動
     if (b.playing !== d.playing || b.rate !== d.rate || Math.abs(pred - d.t) > 0.12) {
@@ -98,6 +114,7 @@ async function poll() {
     }
   } catch {
     ST.sid = null;   // 練唱台關掉了：畫面清空
+    if (INFO) document.getElementById("info").classList.remove("on");
   }
   setTimeout(poll, 250);
 }

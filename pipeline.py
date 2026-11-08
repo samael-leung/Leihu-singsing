@@ -49,7 +49,8 @@ DEFAULT_CONFIG = {
     "whisper_model": "large-v3-turbo",
     "lyrics_language": "",   # 空字串＝自動判斷
     "convert_to_taiwan": True,
-    "auto_recognize_lyrics": False,   # 匯入時自動辨識歌詞（關閉時直接套用線上搜尋到的第一個版本）
+    "auto_recognize_lyrics": False,
+    "global_hotkeys": True,   # 1.7：Ctrl+Alt 全域快捷鍵（重開練唱台後生效）   # 匯入時自動辨識歌詞（關閉時直接套用線上搜尋到的第一個版本）
     "audio_out": "",   # 音樂輸出裝置名稱；空字串＝系統預設
     "font": "huninn",   # 介面與歌詞字體：huninn（內建 jf open 粉圓）／kai（楷書）／sans（黑體）
     "pitch_model": "auto",
