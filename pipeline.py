@@ -2069,9 +2069,21 @@ def segment_notes(f0: np.ndarray) -> list[list[float]]:
 PITCH_ALGO = 2   # 1.4.2：旋律分析改良（補斷點、修八度）；舊的歌可以重新分析旋律
 
 
+def analysis_vocal(d: Path) -> np.ndarray:
+    """旋律分析與歌詞辨識用的人聲（16 kHz 單聲道）。
+    1.6.5：多人輪流唱的歌（例如 S.H.E），分離模型常把某位成員唱的整句歸到「合音」，主唱軌就斷斷續續；
+    這種歌設定成「合唱模式」後，改用主唱＋合音一起分析，音高追蹤會跟著當下最大聲（通常就是旋律）的那個人。"""
+    lead = read_audio(stem_path(d, "lead"), sr=PITCH_SR, mono=True)
+    if read_meta(d).get("vocal_mode") == "all" and stem_path(d, "back").exists():
+        back = read_audio(stem_path(d, "back"), sr=PITCH_SR, mono=True)
+        n = min(len(lead), len(back))
+        lead = lead[:n] + back[:n]
+    return lead
+
+
 def step_pitch(d: Path, cfg: dict, report) -> None:
-    report("分析主唱旋律", 0.55)
-    y16 = read_audio(stem_path(d, "lead"), sr=PITCH_SR, mono=True)
+    report("分析主唱旋律" if read_meta(d).get("vocal_mode") != "all" else "分析旋律（合唱模式：主唱＋合音）", 0.55)
+    y16 = analysis_vocal(d)
     midi = track_pitch(y16, cfg)
     notes = segment_notes(midi)
     data = {
@@ -2096,7 +2108,18 @@ def load_pitch(d: Path) -> tuple[np.ndarray, list]:
 
 # ---------------------------------------------------------------- 歌詞
 
-HALLUCINATION = re.compile(r"字幕|訂閱|订阅|點贊|点赞|感謝觀看|感谢观看|Amara|請不吝|请不吝|明鏡|明镜")
+# Whisper 在間奏、沒有人聲的地方常會「聽到」訓練資料裡影片字幕的片頭片尾字樣，這些句子直接丟掉
+HALLUCINATION = re.compile(
+    r"字幕|訂閱|订阅|點贊|点赞|感謝觀看|感谢观看|Amara|請不吝|请不吝|明鏡|明镜"
+    r"|優優獨播|优优独播|獨播劇場|独播剧场|YoYo\s*Television|Television\s*Series|Series\s*Exclusive"
+    r"|ご視聴|チャンネル登録|시청해\s*주셔서|구독"
+    r"|thanks?\s+(you\s+)?for\s+watching|please\s+subscribe|subtitles?\s+by", re.I)
+
+
+def strip_hallucinations(lrc: str) -> str:
+    """把辨識結果裡的幻覺句子拿掉（1.6.5 以前辨識的歌，開啟時順便清理）。"""
+    out = [l for l in lrc.splitlines() if not HALLUCINATION.search(re.sub(r"^(\[[^\]]*\])+", "", l))]
+    return "\n".join(out) + ("\n" if lrc.endswith("\n") and out else "")
 PUNCT_END = "，。！？、,.!?;；：:…"
 
 
@@ -2131,7 +2154,17 @@ def _whisper_model(cfg):
     root = str(MODELS / "whisper")
     name = cfg.get("whisper_model") or "large-v3-turbo"
     try:
-        return WhisperModel(name, device="auto", compute_type="default", download_root=root)
+        model = WhisperModel(name, device="auto", compute_type="default", download_root=root)
+        if model.model.device != "cuda":
+            return model
+        try:
+            # 有 NVIDIA 顯示卡時 device="auto" 一定選顯示卡，但裝的是 CPU 版 PyTorch 時沒有 cublas64_12.dll。
+            # 這時第一次運算會出錯，之後的 transcribe 卻會一直卡住、按停止也沒用，所以先試算一小段確認
+            model.detect_language(np.zeros(16000, dtype=np.float32), vad_filter=False)
+            return model
+        except RuntimeError as e:
+            print(f"[lyrics] 顯示卡無法執行語音辨識，改用 CPU（比較慢）：{e}", flush=True)
+            del model
     except Exception:
         traceback.print_exc()
     try:
@@ -2271,7 +2304,7 @@ def step_lyrics(d: Path, cfg: dict, report) -> None:
     report("載入語音辨識模型（第一次會下載）", 0.7)
     free_gpu()
     model = _whisper_model(cfg)
-    y16 = read_audio(stem_path(d, "lead"), sr=PITCH_SR, mono=True)
+    y16 = analysis_vocal(d)
     report("判斷歌詞語言", 0.74)
     meta0 = read_meta(d)
     song_lang = meta0.get("lyrics_language")          # 這首歌個別指定的語言（None＝依設定）
@@ -2912,10 +2945,10 @@ class Jobs:
                 self.update(jid, status="error", error=f"{type(e).__name__}: {e}")
 
 
-def process_song(song_id: str, steps: list[str]):
+def process_song(song_id: str, steps: list[str], cfg_override: dict | None = None):
     def run(report):
         d = song_dir(song_id)
-        cfg = load_config()
+        cfg = dict(load_config(), **(cfg_override or {}))
         meta = read_meta(d)
         if "import" in steps or not meta["steps"].get("import"):
             step_import(d, report)
@@ -3069,7 +3102,7 @@ def similarity(recognized: str, candidate: str) -> float | None:
     return round(sum(x.size for x in m.get_matching_blocks()) / len(a), 3)
 
 
-USER_AGENT = "LeihuLiantai/1.6.5 (+https://github.com/LeihuTW/Leihu-singsing)"   # HTTP 標頭只能用英文字
+USER_AGENT = "LeihuLiantai/1.6.9 (+https://github.com/samael-leung/Leihu-singsing)"   # HTTP 標頭只能用英文字
 
 
 def _http_json(url: str, headers: dict | None = None, timeout: int = 8):
@@ -3324,29 +3357,59 @@ def voice_phrases(d: Path, gap: float = 0.35, min_len: float = 0.3) -> list[tupl
 
 
 def align_synced_to_voice(lines: list[dict], d: Path, cand_dur: float | None, dur: float | None) -> tuple[list[dict], str]:
-    """網站的時間軸和這首歌對不上（版本長度不同）時，找最能對上主唱開口位置的整體位移（與速度比例）。"""
-    ph = voice_phrases(d)
-    if not ph or not lines:
+    """網站的時間軸和這首歌對不上（版本長度不同、前奏不同）時，找最能對上主唱開口位置的整體位移（與速度比例）。"""
+    r = voice_fit([l["t"] for l in lines], d, cand_dur, dur) if lines else None
+    if not r:
         return lines, ""
+    sc, off = r
+    out = [{**l, "t": round(max(0.0, l["t"] * sc + off), 2)} for l in lines]
+    return out, f"依主唱的聲音位置調整了網站的時間軸（{off:+.1f} 秒{'、速度比例 %.3f' % sc if sc != 1.0 else ''}）"
+
+
+def voice_fit(times: list[float], d: Path, cand_dur: float | None = None, dur: float | None = None):
+    """回傳 (速度比例, 位移秒數)；和原本的時間差不多就回傳 None。"""
+    ph = voice_phrases(d)
+    if not ph or not times:
+        return None
     onsets = np.array([a for a, _ in ph])
-    ts = np.array([l["t"] for l in lines], dtype=float)
+    ts = np.array(times, dtype=float)
     scales = [1.0]
     if cand_dur and dur and 0.8 < dur / cand_dur < 1.25:
         scales.append(dur / cand_dur)
+
+    if len(onsets) < 2:
+        return None
 
     def fit(t):
         k = np.clip(np.searchsorted(onsets, t), 1, len(onsets) - 1)
         dist = np.minimum(np.abs(t - onsets[k - 1]), np.abs(t - onsets[k]))
         return float(np.exp(-(dist ** 2) / (2 * 0.3 ** 2)).sum())
-    best = (fit(ts), 1.0, 0.0)
+    base = fit(ts)
+    best = (base, 1.0, 0.0)
+    # 1.6.8：MV 版前奏常常長很多，範圍放寬到 ±60 秒；先每 0.25 秒粗找，再在最佳位置附近每 0.02 秒細找
     for sc in scales:
-        for off in np.arange(-25, 25.01, 0.05):
+        coarse = max(((fit(ts * sc + off), float(off)) for off in np.arange(-60, 60.01, 0.25)))
+        for off in np.arange(coarse[1] - 0.5, coarse[1] + 0.501, 0.02):
             v = fit(ts * sc + off)
             if v > best[0] + 1e-9:
-                best = (v, sc, float(off))
-    _, sc, off = best
-    out = [{**l, "t": round(max(0.0, l["t"] * sc + off), 2)} for l in lines]
-    return out, f"依主唱的聲音位置調整了網站的時間軸（{off:+.1f} 秒{'、速度比例 %.3f' % sc if sc != 1.0 else ''}）"
+                best = (v, sc, round(float(off), 2))
+    v, sc, off = best
+    # 明顯比原本的時間軸更貼合主唱才調整，避免把本來就對的時間軸亂移
+    if v < base + max(1.0, 0.08 * len(ts)) or (abs(off) < 0.15 and sc == 1.0):
+        return None
+    return sc, off
+
+
+def lyrics_shift(d: Path, times: list[float]) -> tuple[float, float]:
+    """目前的歌詞整體和歌聲差了好幾秒時，依主唱開口位置找出整體位移與速度比例（畫面套用，逐字時間一起移動）。
+    不需要調整時回傳 (1, 0)。"""
+    ts = [float(t) for t in times if t is not None]
+    if len(ts) < 3:
+        raise UserError("含時間的歌詞太少，沒辦法自動校正")
+    if not (d / "pitch.json").exists():
+        raise UserError("這首歌還沒分析旋律，沒辦法依歌聲校正")
+    meta = read_meta(d)
+    return voice_fit(ts, d, None, meta.get("duration")) or (1.0, 0.0)
 
 
 def align_by_voice(lines: list[str], d: Path, bonus: float = 0.6) -> list[dict]:
@@ -3506,7 +3569,9 @@ def apply_candidate(d: Path, cand: dict) -> tuple[str, str]:
     reliable = recognition_reliable(meta) and (d / "lyrics_auto.lrc").exists()
     if synced and (diff is None or diff <= 3):
         lines = [l for l in parse_lrc(synced) if l["t"] is not None and l["text"]]
-        how = "使用網站提供的時間軸"
+        # 1.6.8：長度相同，前奏卻可能不同（MV 版、剪輯版），整體差好幾秒；依主唱開口位置檢查並校正
+        lines, how = align_synced_to_voice(lines, d, cand.get("duration"), dur)
+        how = how or "使用網站提供的時間軸"
     elif synced:
         # 網站有時間軸、但版本長度不同：不靠辨識結果，改依主唱的聲音位置整體平移
         lines = [l for l in parse_lrc(synced) if l["t"] is not None and l["text"]]

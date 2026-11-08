@@ -5,7 +5,7 @@ cd "$(dirname "$0")"
 app_version=$(tr -d "\r\n" < ../VERSION)
 rm -rf payload && mkdir -p payload/static payload/setup out
 cp ../app.py ../song_request.py ../youtube_playlist.py ../forced_alignment.py ../alignment_worker.py ../desktop.py ../installer.py ../pipeline.py ../ai_api.py ../ollama_setup.py ../model_setup.py ../share.py ../VERSION ../requirements-win.txt payload/
-cp ../static/index.html ../static/app.js ../static/song-request.js ../static/style.css ../static/help.html ../static/overlay.html ../static/icon.ico ../static/kenzi.png ../static/linepay.png ../static/song-list-template.csv payload/static/
+cp ../static/index.html ../static/app.js ../static/song-request.js ../static/style.css ../static/help.html ../static/overlay.html ../static/timing.html ../static/icon.ico ../static/kenzi.png ../static/linepay.png ../static/song-list-template.csv payload/static/
 mkdir -p payload/static/fonts && cp ../static/fonts/* payload/static/fonts/
 cp ../static/help.html payload/使用說明.html
 cp ../setup/install.ps1 ../setup/clean-uninstall.ps1 ../setup/repair-runtime.ps1 payload/setup/
@@ -15,4 +15,16 @@ cp "out/LeihuLiantai-windows-ai-choice-${app_version}-CleanUninstall.exe" payloa
 cp license.txt payload/版權與使用聲明.txt
 LANG=C.UTF-8 LC_ALL=C.UTF-8 makensis -V2 leihu.nsi
 LANG=C.UTF-8 LC_ALL=C.UTF-8 makensis -V2 update.nsi
+python3 - "$app_version" <<'PY'
+import hashlib, json, sys
+from pathlib import Path
+version = sys.argv[1]
+name = f"LeihuLiantai-windows-ai-choice-{version}-Update.exe"
+exe = Path('out') / name
+base = 'https://raw.githubusercontent.com/samael-leung/Leihu-singsing/refs/heads/leihu-song-request-sync/installer/releases/'
+manifest = {'tag_name': 'v' + version, 'assets': [{'name': name,
+    'browser_download_url': base + name, 'size': exe.stat().st_size,
+    'digest': 'sha256:' + hashlib.sha256(exe.read_bytes()).hexdigest()}]}
+Path('out/update.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
+PY
 ls -la out

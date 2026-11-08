@@ -21,12 +21,12 @@ const state={micGain:1,playing:true,speed:1,live:[]};
 const context=vm.createContext({window:{AudioContext},S:state,$:element,
  navigator:{mediaDevices:{getUserMedia:async()=>({getTracks:()=>[{stop(){stopped++;}}],getAudioTracks:()=>[{label:'USB mic'}]})}},
  listMics(){},toast(message){throw Error(message);},micLevel(){},recTap:async()=>null,
- detect(buf,rate){detectedRate=rate;return 60;},cur:()=>10,keyHintAdd(){},refAt(){},
+ detect(buf,rate){detectedRate=rate;return 60;},cur:()=>10,keyHintAdd(){},refAt(){},judgeTick(){},
  setTimeout(fn,delay){assert.equal(delay,1500);timers.push(fn);},
  stopRecording(){state.rec=null;},store:{get:()=>1},
 });
 vm.runInContext(js.slice(js.indexOf('let ctx ='),js.indexOf('/* ------------------------------------------------------------ 導覽')),context);
-vm.runInContext(js.slice(js.indexOf('async function startMic()'),js.indexOf('/* 麥克風音量表')),context);
+vm.runInContext(js.slice(js.indexOf('async function startMic()'),js.indexOf('/* 測試中：每句即時評價')),context);
 vm.runInContext(js.slice(js.indexOf('function syncGainUi()'),js.indexOf('function setMicGain(')),context);
 (async()=>{
  const playback=vm.runInContext('ac()',context);

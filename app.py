@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -24,7 +25,7 @@ import pipeline as P
 import share as SH
 import song_request
 
-VERSION = "1.6.6"
+VERSION = "1.6.9"
 HOST, PORT = "127.0.0.1", int(os.environ.get("LIANTAI_PORT", "8765"))
 app = Flask(__name__, static_folder=str(P.ROOT / "static"), static_url_path="/static")
 app.config["MAX_CONTENT_LENGTH"] = 1024 * 1024 * 1024
@@ -68,7 +69,7 @@ def status():
                    hq_model=P.HQ_KARAOKE,
                    ai_ready=C.ready(), ai_provider=C.provider(),
                    session_cost=C.summary()["session"]["cost_usd"],
-                   remote=dict(REMOTE), yt_pause=dict(P.YT_PAUSE), **_jobs_for_ui())
+                   remote=dict(REMOTE), yt_pause=dict(P.YT_PAUSE), update=dict(UPDATE), **_jobs_for_ui())
 
 
 UI_QUEUE_SHOWN = 30
@@ -585,9 +586,37 @@ def reprocess(sid):
     P.song_dir(sid)
     steps = (request.get_json(force=True) or {}).get("steps") or ["separate", "pitch", "lyrics"]
     steps = [s for s in steps if s in ("import", "separate", "pitch", "lyrics")]
+    body = request.get_json(force=True) or {}
+    if "vocal_mode" in body:   # 合唱模式：旋律與辨識改用主唱＋合音（多人輪流唱的歌）
+        P.update_meta(P.song_dir(sid), vocal_mode="all" if body["vocal_mode"] == "all" else None)
+    if body.get("max_quality"):
+        return jsonify(job=queue_max(sid))
     label = ",".join(steps)
     jid = jobs.find("process", sid, label) or jobs.submit("process", sid, P.process_song(sid, steps), label=label)
     return jsonify(job=jid)
+
+
+def queue_max(sid: str) -> str:
+    """1.6.5：用最高品質重新分離人聲（高品質模型＋最精細設定），再重新分析旋律、重新辨識歌詞。
+    合唱、合音多的歌，標準處理常把合音算進主唱，旋律線和辨識都會亂；這個選項最慢但最乾淨。
+    目前使用的線上／匯入歌詞不會被覆蓋（辨識結果另外保存，可以在歌詞面板切換）。"""
+    if not P.hq_ready():
+        P.start_hq_download()
+        raise P.UserError("最高品質的分離模型（約 900 MB）還在下載，進度顯示在歌曲庫上方，下載完成後再按一次")
+    jid = jobs.find("process", sid, "max")
+    if jid:
+        return jid
+    proc = P.process_song(sid, ["separate", "pitch", "lyrics"],
+                          cfg_override={"karaoke_quality": "high", "karaoke_overlap": 4})
+
+    def run(report):
+        proc(report)
+        P.update_meta(P.song_dir(sid), fine_suggest=False, fine_done=True, fine_queued=False)
+        try:
+            prerender_key(sid)   # 重新分軌會清掉舊的移調版本，重做預設 KEY 的版本
+        except Exception as e:
+            P.log_error("queue_max prerender", e)
+    return jobs.submit("process", sid, run, label="max")
 
 
 @app.get("/api/songs/<sid>/pitch")
@@ -603,10 +632,17 @@ def pitch(sid):
 def get_lyrics(sid):
     d = P.song_dir(sid)
 
+    meta = P.read_meta(d)
+
     def rd(n):
         if not (d / n).exists():
             return ""
         t = (d / n).read_text("utf-8")
+        if n == "lyrics_auto.lrc" or (n == "lyrics.lrc" and meta.get("lyrics_source") in (None, "whisper")):
+            c = P.strip_hallucinations(t)   # 辨識結果裡「優優獨播劇場」之類的幻覺句子
+            if c != t:
+                P.atomic_write_text(d / n, c)
+                t = c
         if P.is_japanese(t):   # 1.5 以前把日文歌詞轉成了台灣繁體（来→來）：改回日文字形並存回去
             j = P.tw_to_ja(t)
             if j != t:
@@ -1095,7 +1131,8 @@ def ai_align(sid):
         + "\n\n資料二：\n" + "\n".join(f"{s:.2f}\t{e:.2f}\t{k}" for s, e, k in phrases)
         + f"\n\n資料三（共 {n} 行）：\n" + "\n".join(f"{i + 1}. {t}" for i, t in enumerate(ref_lines))
     )
-    data, usage = C.ask_tool(prompt, tool, 8000, "align", meta.get("title", ""))
+    # 回傳的只是每行一個數字（約 6 token），上限依行數給，夠用又不會在出錯時白白燒掉很多 token
+    data, usage = C.ask_tool(prompt, tool, min(16000, 2000 + 25 * n), "align", meta.get("title", ""))
     times = data.get("times") or []
     if len(times) != n:
         raise P.UserError(f"AI 回傳了 {len(times)} 個時間，但歌詞有 {n} 行。再試一次。")
@@ -1167,6 +1204,14 @@ def lyrics_candidates(sid):
     cands = json.loads(p.read_text("utf-8")) if p.exists() else []
     return jsonify(pending=bool(meta.get("lyrics_pending")), results=cands,
                    recognized=P.recognized_text(d)[:300])
+
+
+@app.post("/api/songs/<sid>/lyrics/autoshift")
+def lyrics_autoshift(sid):
+    """1.6.8：依主唱開口位置，算出目前歌詞整體要移多少秒（由畫面套用）。"""
+    times = (request.get_json(force=True) or {}).get("times") or []
+    sc, off = P.lyrics_shift(P.song_dir(sid), times[:2000])
+    return jsonify(scale=sc, offset=off)
 
 
 @app.post("/api/songs/<sid>/lyrics/apply")
@@ -1294,7 +1339,8 @@ def export_lyrics(sid):
     return jsonify(path=str(path))
 
 
-EXTERNAL_URLS = ("https://www.twitch.tv/leihustore", "https://github.com/LeihuTW/Leihu-singsing",
+RELEASES_URL = "https://github.com/samael-leung/Leihu-singsing/tree/leihu-song-request-sync/installer/releases"
+EXTERNAL_URLS = ("https://www.twitch.tv/leihustore", "https://github.com/LeihuTW/Leihu-singsing", RELEASES_URL,
                  # 分享錄音：各平台的發文／上傳頁
                  "https://www.facebook.com", "https://www.instagram.com", "https://x.com/compose/post",
                  "https://www.threads.com")
@@ -1378,12 +1424,80 @@ def open_app():
         prof = P.ROOT / ".appwin"
         prof.mkdir(exist_ok=True)
         subprocess.Popen([exe, f"--app={url}", f"--user-data-dir={prof}", "--window-size=1380,920",
-                          "--no-first-run", "--no-default-browser-check", "--autoplay-policy=no-user-gesture-required"],
+                          "--no-first-run", "--no-default-browser-check", "--disable-extensions", "--disable-sync",
+                          "--autoplay-policy=no-user-gesture-required"],
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     else:
         import webbrowser
         webbrowser.open(url)
     return jsonify(ok=True, app=bool(exe))
+
+
+# ---------------------------------------------------------------- 逐句調整的獨立視窗（1.6.5）
+# 獨立視窗（/timing）和練唱畫面可能在不同的程式裡（桌面版視窗、Edge 視窗），所以透過伺服器轉送：
+# 練唱畫面把歌詞與播放時間送上來，獨立視窗用長輪詢讀；獨立視窗按的按鈕變成指令，練唱畫面用長輪詢收。
+# owner 是練唱畫面開視窗時產生的代號，指令只送給開它的那個畫面。
+TIMING: dict = {"state": {}, "sseq": 0, "cmds": [], "cseq": 0, "seen": {}}
+_TCOND = threading.Condition()
+
+
+@app.post("/api/timing/state")
+def timing_state_put():
+    body = request.get_json(force=True) or {}
+    owner = str(body.pop("owner", ""))[:20]
+    if not owner:
+        raise P.UserError("缺少 owner")
+    with _TCOND:
+        st = TIMING["state"].setdefault(owner, {})
+        st.update(body)
+        TIMING["sseq"] += 1
+        st["seq"] = TIMING["sseq"]
+        _TCOND.notify_all()
+    return jsonify(ok=True)
+
+
+@app.get("/api/timing/state")
+def timing_state_get():
+    owner = request.args.get("owner", "")[:20]
+    after = int(request.args.get("after", 0) or 0)
+    with _TCOND:
+        TIMING["seen"][owner] = time.time()
+        _TCOND.wait_for(lambda: TIMING["state"].get(owner, {}).get("seq", 0) > after, timeout=15)
+        st = dict(TIMING["state"].get(owner, {}))
+    return jsonify(st)
+
+
+@app.post("/api/timing/cmd")
+def timing_cmd_put():
+    body = request.get_json(force=True) or {}
+    owner = str(body.get("owner", ""))[:20]
+    with _TCOND:
+        TIMING["seen"][owner] = time.time()
+        TIMING["cseq"] += 1
+        TIMING["cmds"] = TIMING["cmds"][-200:] + [{"seq": TIMING["cseq"], "owner": owner, "cmd": body.get("cmd") or {}}]
+        _TCOND.notify_all()
+    return jsonify(ok=True)
+
+
+@app.get("/api/timing/cmds")
+def timing_cmds_get():
+    owner = request.args.get("owner", "")[:20]
+    after = int(request.args.get("after", -1) or 0)
+
+    def mine():
+        return [c for c in TIMING["cmds"] if c["owner"] == owner and c["seq"] > after]
+    with _TCOND:
+        if after < 0:   # 第一次：從現在開始收
+            return jsonify(seq=TIMING["cseq"], cmds=[], alive=False)
+        _TCOND.wait_for(lambda: bool(mine()), timeout=20)
+        out = mine()
+        alive = time.time() - TIMING["seen"].get(owner, 0) < 40
+        return jsonify(seq=max([after] + [c["seq"] for c in out]), cmds=[c["cmd"] for c in out], alive=alive)
+
+
+@app.get("/timing")
+def timing_page():
+    return send_from_directory(P.ROOT / "static", "timing.html", max_age=0)
 
 
 @app.post("/api/open-url")
@@ -1461,6 +1575,110 @@ def loudness_backfill() -> None:
             P.log_error("loudness_backfill", e)
 
 
+# 整合分支有較新的版本時，latest 是新版的版本號。can_install＝可以在程式裡一鍵更新；
+# state：""、downloading（下載安裝檔中，progress 0～1）、installing（已啟動安裝檔）、error
+UPDATE = {"latest": None, "url": RELEASES_URL, "can_install": False, "state": "", "progress": 0.0, "error": ""}
+_UPDATE_ASSET: dict = {}   # 新版安裝檔：name、url、size、digest
+_update_lock = threading.Lock()
+ASSET_PREFIX = "https://raw.githubusercontent.com/samael-leung/Leihu-singsing/refs/heads/leihu-song-request-sync/installer/releases/"
+UPDATE_MANIFEST = ASSET_PREFIX + "update.json"
+
+
+def _ver(s: str) -> tuple:
+    return tuple(int(x) for x in re.findall(r"\d+", s)[:3])
+
+
+def _installed_copy() -> bool:
+    """是用安裝檔裝的（有內建的 Python 和解除安裝程式）。開發用的原始碼資料夾不做自動更新。"""
+    runtime = (P.ROOT / "python" / "pythonw.exe").exists() or (
+        (P.ROOT / "secure-runtime" / "leihu-ready.json").exists()
+        and (P.ROOT / "secure-runtime" / "Scripts" / "pythonw.exe").exists())
+    return sys.platform == "win32" and runtime and (P.ROOT / "installed.json").exists()
+
+
+def check_update() -> None:
+    """啟動時到 GitHub 查一次最新版本，有新版就在畫面上方提示。沒網路或查不到就什麼都不顯示。"""
+    time.sleep(5)
+    try:
+        # Only this integration branch may update an integration installation.
+        # Installing an original-author release would remove song sync and AI choices.
+        r = P._http_json(UPDATE_MANIFEST)
+        tag = str(r.get("tag_name") or "")
+        if _ver(tag) <= _ver(VERSION):
+            return
+        # Program-only updater: no runtime/package/model reinstall. Check the exact
+        # branch URL, basename, size and SHA-256 before offering one-click install.
+        name = f"LeihuLiantai-windows-ai-choice-{tag.lstrip('vV')}-Update.exe"
+        asset = next((a for a in r.get("assets") or [] if isinstance(a, dict)
+                      and a.get("name") == name
+                      and re.fullmatch(r"LeihuLiantai-windows-ai-choice-\d+\.\d+\.\d+-Update\.exe", name)
+                      and a.get("browser_download_url") == ASSET_PREFIX + name
+                      and isinstance(a.get("size"), int) and a["size"] > 0
+                      and re.fullmatch(r"sha256:[0-9a-f]{64}", str(a.get("digest") or ""))), None)
+        _UPDATE_ASSET.clear()
+        if asset:
+            _UPDATE_ASSET.update(name=asset["name"], url=asset["browser_download_url"],
+                                 size=int(asset.get("size") or 0), digest=asset["digest"])
+        UPDATE.update(latest=tag.lstrip("vV"),
+                      can_install=bool(asset) and _installed_copy())
+        print(f"[update] 有新版本 {tag}（目前 {VERSION}，一鍵更新：{UPDATE['can_install']}）", flush=True)
+    except Exception as e:
+        P.log_error("check_update", e)
+
+
+def _download_and_install() -> None:
+    """下載新版安裝檔、核對檢查碼，再用安靜模式執行。安裝檔會先關閉程式，裝完自動重新開啟。"""
+    import hashlib
+    import urllib.request
+    a = dict(_UPDATE_ASSET)
+    try:
+        folder = Path(tempfile.gettempdir()) / "LeihuLiantai-update"
+        folder.mkdir(exist_ok=True)
+        exe, part = folder / a["name"], folder / (a["name"] + ".part")
+        h, got = hashlib.sha256(), 0
+        req = urllib.request.Request(a["url"], headers={"User-Agent": P.USER_AGENT})
+        with urllib.request.urlopen(req, timeout=30) as r, open(part, "wb") as f:
+            while chunk := r.read(1 << 16):
+                f.write(chunk)
+                h.update(chunk)
+                got += len(chunk)
+                UPDATE["progress"] = round(min(got / a["size"], 1.0), 3) if a["size"] else 0.0
+        if got != a["size"] or f"sha256:{h.hexdigest()}" != a["digest"]:
+            part.unlink(missing_ok=True)
+            raise P.UserError("下載的安裝檔不完整（檢查碼不符），請再試一次或到下載頁手動下載")
+        part.replace(exe)
+        UPDATE.update(state="installing", progress=1.0)
+        print(f"[update] 啟動安裝檔 {exe}", flush=True)
+        # /S＝安靜模式（沿用已下載的套件與模型，只更新需要的部分）；/D 一定要放最後、不能加引號
+        cmd = f'"{exe}" /S /D={P.ROOT}'
+        flags = 0x00000008 | 0x00000200   # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP：程式關閉時安裝檔不會跟著結束
+        try:
+            subprocess.Popen(cmd, creationflags=flags | 0x01000000, close_fds=True)   # CREATE_BREAKAWAY_FROM_JOB
+        except OSError:
+            subprocess.Popen(cmd, creationflags=flags, close_fds=True)
+    except Exception as e:
+        UPDATE.update(state="error", error=str(e) if isinstance(e, P.UserError) else f"更新失敗：{e}")
+        P.log_error("update", e)
+
+
+@app.post("/api/update/install")
+def update_install():
+    """畫面上按「更新」：在背景下載並執行新版安裝檔。"""
+    if not request.is_json:
+        return jsonify(error="必須使用 JSON。"), 415
+    origin = request.headers.get("Origin")
+    if origin and origin != request.host_url.rstrip("/"):
+        return jsonify(error="不允許跨來源更新程式。"), 403
+    if not UPDATE["can_install"]:
+        raise P.UserError("這個版本沒辦法在程式裡更新，請到下載頁下載新版安裝檔")
+    with _update_lock:
+        if UPDATE["state"] in ("downloading", "installing"):
+            return jsonify(ok=True)
+        UPDATE.update(state="downloading", progress=0.0, error="")
+    threading.Thread(target=_download_and_install, daemon=True, name="update").start()
+    return jsonify(ok=True)
+
+
 def main():
     P.LIB.mkdir(exist_ok=True)
     if (sys.platform in ("win32", "darwin") and
@@ -1474,6 +1692,7 @@ def main():
     resume_downloads()
     threading.Thread(target=prefetcher, daemon=True, name="prefetch").start()
     threading.Thread(target=loudness_backfill, daemon=True, name="loudness").start()
+    threading.Thread(target=check_update, daemon=True, name="update").start()
     url = f"http://{HOST}:{PORT}"
     print(f"\n  {P.APP_NAME} {VERSION} 已啟動：{url}\n  關閉這個視窗就會結束程式。\n")
     if "--no-browser" not in sys.argv:

@@ -228,8 +228,19 @@ def _call(prompt, max_tokens, purpose, song, schema=None, cfg=None):
             if schema:
                 body['tools'] = [{'name': 'set_line_times', 'description': '回傳每行歌詞的開始秒數', 'input_schema': schema}]
                 body['tool_choice'] = {'type': 'tool', 'name': 'set_line_times'}
-            result = _request('https://api.anthropic.com/v1/messages', body,
-                              extra_headers={'x-api-key': key, 'anthropic-version': '2023-06-01'})
+                body['thinking'] = {'type': 'between_tools'}
+                body['messages'][0]['content'] += '\n請直接呼叫工具回傳時間，不要先用文字說明或推理。'
+            headers = {'x-api-key': key, 'anthropic-version': '2023-06-01'}
+            try:
+                result = _request('https://api.anthropic.com/v1/messages', body, extra_headers=headers)
+            except P.UserError as error:
+                # Older Claude models may reject the new thinking setting with
+                # an unbilled HTTP 400. Retry once without it; never retry a
+                # truncated/billed response or a network/authentication error.
+                if not schema or not isinstance(error.__cause__, HTTPError) or error.__cause__.code != 400:
+                    raise
+                result = _request('https://api.anthropic.com/v1/messages',
+                                  {k: v for k, v in body.items() if k != 'thinking'}, extra_headers=headers)
             raw = result.get('usage') or {}
             tin = sum(int(raw.get(k) or 0) for k in ('input_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens'))
             usage = record(model, tin, int(raw.get('output_tokens') or 0), purpose, song, active)
