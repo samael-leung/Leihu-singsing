@@ -75,6 +75,7 @@ const mc = () => (micCtx ||= new (window.AudioContext || window.webkitAudioConte
 
 /* ------------------------------------------------------------ 導覽 */
 function show(view) {
+  if (window.LIVE && LIVE.on && view !== "about") { liveLayout(); if (view === "practice") renderSongs(); return; }   // 直播模式：歌曲庫和歌詞一起顯示
   $("#view-lib").hidden = view !== "lib";
   $("#view-practice").hidden = view !== "practice";
   $("#view-about").hidden = view !== "about";
@@ -224,6 +225,322 @@ function songMatches(s) {
     s.lyrics_online && s.lyrics_online.artist].filter(Boolean).join(" ").toLowerCase();
   return LIB.q.split(/\s+/).every(w => hay.includes(w));
 }
+/* ------------------------------------------------------------ 直播模式（精簡版面）
+   左邊歌曲清單（搜尋、分類、抽歌），右邊大字歌詞＋播放列＋原曲／卡拉OK、音量、歌詞即時調整。
+   只是同一個畫面換版面，所有功能（KEY、背景處理、直播歌詞）照常運作 */
+var LIVE = { on: store.get("liveMode", false) };
+function liveLayout() {
+  document.body.classList.toggle("live", LIVE.on);
+  resetLyrNodes();
+  $("#live-toggle").classList.toggle("cur", LIVE.on);
+  if (LIVE.on) { $("#view-lib").hidden = false; $("#view-practice").hidden = false; $("#view-about").hidden = true; }
+  if (!S.song) { $("#p-title").textContent = LIVE.on ? "從左邊選一首歌" : ""; }
+  S.dirty = true;
+  setTimeout(fitLyrNow, 50);
+}
+function setLive(on) {
+  LIVE.on = on; store.set("liveMode", on);
+  if (on) { liveLayout(); renderSongs(); }
+  else { document.body.classList.remove("live"); $("#live-toggle").classList.remove("cur"); show(S.song ? "practice" : "lib"); renderSongs(); }
+}
+$("#live-toggle").onclick = () => setLive(!LIVE.on);
+$$("[data-live-preset]").forEach(b => (b.onclick = () => $(`[data-preset="${b.dataset.livePreset}"]`).click()));
+/* 音量：只影響歌曲（主唱／合音／伴奏），導引音和麥克風不受影響 */
+S.masterVol = store.get("masterVol", 1);
+function syncLiveVol() { $("#live-vol").value = String(S.masterVol); $("#live-vol-v").textContent = Math.round(S.masterVol * 100); if (S.master) S.master.gain.value = S.masterVol; }
+$("#live-vol").oninput = e => { S.masterVol = +e.target.value; store.set("masterVol", S.masterVol); syncLiveVol(); };
+syncLiveVol();
+function liveAdjust(which, d) {
+  if (!S.song || !S.lines.length) return toast("這首歌還沒有含時間的歌詞");
+  const t = cur(), from = $("#lv-from").checked;
+  let k = Math.max(0, lineIndexAt(t));
+  if (which === "next") { k = lineIndexAt(t) + 1; if (k >= S.lines.length) return toast("後面沒有歌詞了"); }
+  const l = S.lines[k];
+  const nt = d == null ? t - 0.08 * S.speed : l.t + d;
+  if (from) shiftFrom(k, nt);
+  else { shiftLine(l, nt); saveLyricsSoon(); toast(`「${l.text.slice(0, 14)}」→ ${fmt(l.t)}`, 1800); }
+}
+$("#lv-now").onclick = () => liveAdjust("cur");
+$("#lv-next").onclick = () => liveAdjust("next");
+$("#lv-minus").onclick = () => liveAdjust("cur", -0.1);
+$("#lv-plus").onclick = () => liveAdjust("cur", 0.1);
+$("#lv-pop").onclick = () => $("#timing-pop").click();
+/* 自訂全域快捷鍵（設定視窗） */
+const HK_NAMES = { Comma: ",", Period: ".", Slash: "/", Semicolon: ";", Quote: "'", BracketLeft: "[", BracketRight: "]",
+  Backslash: "\\", Minus: "-", Equal: "=", Backquote: "`", Space: "空白鍵", Up: "↑", Down: "↓", Left: "←", Right: "→" };
+function hkLabel(c) { return c ? c.split("+").map(p => HK_NAMES[p] || p).join(" + ") : "（不使用）"; }
+function hkFromEvent(e) {   // 把按下的鍵轉成 hotkeys.py 用的名稱
+  const c = e.code;
+  let k = null;
+  if (/^Key[A-Z]$/.test(c)) k = c.slice(3);
+  else if (/^Digit\d$/.test(c)) k = c.slice(5);
+  else if (/^F\d{1,2}$/.test(c)) k = c;
+  else if (/^Numpad\d$/.test(c)) k = "Num" + c.slice(6);
+  else k = { Space: "Space", Enter: "Enter", NumpadEnter: "Enter", PageUp: "PageUp", PageDown: "PageDown", End: "End", Home: "Home",
+    ArrowLeft: "Left", ArrowUp: "Up", ArrowRight: "Right", ArrowDown: "Down", Insert: "Insert", Delete: "Delete",
+    NumpadMultiply: "NumMultiply", NumpadAdd: "NumAdd", NumpadSubtract: "NumSubtract", NumpadDecimal: "NumDecimal", NumpadDivide: "NumDivide",
+    Semicolon: "Semicolon", Equal: "Equal", Comma: "Comma", Minus: "Minus", Period: "Period", Slash: "Slash", Backquote: "Backquote",
+    BracketLeft: "BracketLeft", Backslash: "Backslash", BracketRight: "BracketRight", Quote: "Quote", Pause: "Pause", ScrollLock: "ScrollLock" }[c] || null;
+  if (!k) return null;
+  const mods = [e.ctrlKey && "Ctrl", e.altKey && "Alt", e.shiftKey && "Shift", e.metaKey && "Win"].filter(Boolean);
+  return [...mods, k].join("+");
+}
+let HK = null, hkCapture = null;
+async function renderHotkeys() {
+  try { HK = await api("/api/hotkeys"); } catch (e) { $("#hk-msg").textContent = e.message; return; }
+  const box = $("#hk-list");
+  box.innerHTML = "";
+  const failed = new Set(HK.status?.failed || []);
+  for (const a of HK.actions) {
+    const row = document.createElement("div");
+    row.className = "hk-row";
+    const combo = HK.current[a.id];
+    row.innerHTML = `<span class="lb"></span><button class="hk-key"></button><button class="ghost hk-def" title="改回預設">預設</button><button class="ghost hk-clr" title="不使用這個快捷鍵">清除</button><span class="hk-st"></span>`;
+    $(".lb", row).textContent = a.label;
+    $(".hk-key", row).textContent = hkLabel(combo);
+    $(".hk-st", row).textContent = failed.has(a.id) ? "被其他程式佔用" : "";
+    $(".hk-key", row).onclick = () => hkStart(a.id, $(".hk-key", row));
+    $(".hk-def", row).onclick = () => hkSave(a.id, a.default);
+    $(".hk-clr", row).onclick = () => hkSave(a.id, "");
+    box.appendChild(row);
+  }
+}
+async function hkSave(id, combo) {
+  try {
+    await api("/api/hotkeys", { json: { combos: { [id]: combo } } });
+    $("#hk-msg").textContent = "已儲存，馬上生效。";
+    setTimeout(renderHotkeys, 900);   // 等桌面程式重新註冊後再顯示有沒有被佔用
+  } catch (e) { $("#hk-msg").textContent = e.message; renderHotkeys(); }
+}
+function hkStop() {
+  if (!hkCapture) return;
+  document.removeEventListener("keydown", hkCapture.fn, true);
+  hkCapture = null;
+  api("/api/hotkeys/pause", { json: { on: false } }).catch(() => {});
+}
+function hkStart(id, btn) {
+  hkStop();
+  api("/api/hotkeys/pause", { json: { on: true } }).catch(() => {});   // 錄按鍵時先放開全域快捷鍵
+  btn.textContent = "請按下組合鍵…（Esc 取消）"; btn.classList.add("rec");
+  const fn = e => {
+    if (["Control", "Alt", "Shift", "Meta"].includes(e.key)) return;   // 等真正的按鍵
+    e.preventDefault(); e.stopPropagation();
+    hkStop(); btn.classList.remove("rec");
+    if (e.key === "Escape") return renderHotkeys();
+    const c = hkFromEvent(e);
+    if (!c) { $("#hk-msg").textContent = "這個鍵不能當快捷鍵，請換一個"; return renderHotkeys(); }
+    hkSave(id, c);
+  };
+  hkCapture = { fn };
+  document.addEventListener("keydown", fn, true);
+}
+/* 直播模式的線上歌詞搜尋：把「歌詞」面板裡的搜尋區暫時搬進對話框，關掉再搬回去（功能完全一樣） */
+let lsHome = null;
+$("#lv-search").onclick = () => {
+  if (!S.song) return toast("還沒選歌");
+  const box = $("#ls-box");
+  if (!lsHome) { lsHome = document.createComment("ls-box"); box.before(lsHome); }
+  $("#lsd-body").appendChild(box);
+  box.open = true;
+  $("#ls-dlg").hidden = false;
+  if (!$("#ls-results").children.length) searchLyrics("");
+};
+$("#lsd-close").onclick = () => {
+  $("#ls-dlg").hidden = true;
+  if (lsHome) lsHome.after($("#ls-box"));
+};
+$("#ls-dlg").addEventListener("click", e => { if (e.target.id === "ls-dlg") $("#lsd-close").click(); });
+
+/* 直播模式的操作（畫面按鈕和 Ctrl+Alt 全域快捷鍵共用） */
+function liveAction(act) {
+  if (act === "next-song") return queueNext();
+  if (!S.song) return toast("還沒選歌");
+  if (act === "play") return S.playing || S.wantPlay ? pause() : play();
+  if (act === "now") return liveAdjust("cur");
+  if (act === "next-line") return liveAdjust("next");
+  if (act === "minus") return liveAdjust("cur", -0.1);
+  if (act === "plus") return liveAdjust("cur", 0.1);
+  if (act === "mode") {
+    const k = (S.vol.lead ?? 1) >= 0.5 ? "karaoke" : "orig";
+    $(`[data-preset="${k}"]`).click();
+    return toast(k === "karaoke" ? "卡拉OK（關掉原唱）" : "原曲", 1500);
+  }
+  if (act === "key-up" || act === "key-down") {
+    const sel = $("#key-sel"), v = clamp(S.key + (act === "key-up" ? 1 : -1), -6, 6);
+    if (v === S.key) return;
+    sel.value = String(v); sel.dispatchEvent(new Event("change"));
+    return toast(`KEY ${v > 0 ? "+" : ""}${v}`, 1500);
+  }
+}
+window.liveHotkey = act => { try { liveAction(act); } catch (e) { console.error(e); } };
+
+/* 待唱清單：存在這台電腦的瀏覽器資料裡 */
+LIVE.queue = store.get("liveQueue", []);
+function saveQueue() { store.set("liveQueue", LIVE.queue); renderQueue(); }
+function songById(id) { return LIB.songs.find(s => s.id === id); }
+function renderQueue() {
+  LIVE.queue = LIVE.queue.filter(id => songById(id) || !LIB.songs.length);
+  const box = $("#lq-list");
+  box.innerHTML = "";
+  LIVE.queue.forEach((id, i) => {
+    const s = songById(id); if (!s) return;
+    const row = document.createElement("div");
+    row.className = "lq-item";
+    row.innerHTML = `<span class="n">${i + 1}</span><span class="t"></span><button class="ghost" title="從清單移除">×</button>`;
+    $(".t", row).textContent = s.title + (s.artist ? ` － ${s.artist}` : "");
+    $("button", row).onclick = () => { LIVE.queue.splice(i, 1); saveQueue(); };
+    box.appendChild(row);
+  });
+  $("#lq-n").textContent = LIVE.queue.length ? `${LIVE.queue.length} 首` : "";
+  $("#lq-hint").hidden = LIVE.queue.length > 0;
+  $("#lq-next").disabled = !LIVE.queue.length;
+}
+function queueAdd(id) {
+  if (LIVE.queue.includes(id)) return toast("已經在待唱清單裡了", 1500);
+  LIVE.queue.push(id); saveQueue();
+  toast(`已加入待唱清單（第 ${LIVE.queue.length} 首）`, 1500);
+}
+async function queueNext() {
+  const id = LIVE.queue.shift();
+  if (!id) return toast("待唱清單是空的");
+  saveQueue();
+  pause();
+  await openSong(id);
+  renderSongs();
+  toast(`已載入：${S.song.title}，按播放開始`, 3000);
+}
+$("#lq-next").onclick = () => queueNext();
+$("#lq-clear").onclick = () => { if (LIVE.queue.length && confirm("清空待唱清單？")) { LIVE.queue = []; saveQueue(); } };
+/* 快唱完時先在背景準備下一首的 KEY 版本，切歌不用等轉換 */
+function songKeyFor(s) {
+  const saved = store.get(`song:${s.id}`, {});
+  const useDefault = s.key_set_at && !(saved.at > s.key_set_at * 1000);
+  return { key: clamp((useDefault ? s.key : saved.key) || 0, -6, 6), speed: useDefault ? 1 : saved.speed || 1 };
+}
+function queuePrefetch(t) {
+  const id = LIVE.queue[0];
+  if (!LIVE.on || !id || LIVE.prefetched === id || !S.dur || S.dur - t > 45) return;
+  LIVE.prefetched = id;
+  const s = songById(id); if (!s) return;
+  api(`/api/songs/${id}/variant`, { json: songKeyFor(s) }).catch(() => {});
+}
+function queueAtEnd() {   // 一首唱完：自動載入清單的下一首（不自動播放）
+  if (!LIVE.on || !LIVE.queue.length) return;
+  const endedSong = S.song?.id, endedRequest = songOpenRequest;
+  setTimeout(() => {
+    // A newer Twitch/manual selection must survive a delayed local queue advance.
+    if (LIVE.on && !S.playing && S.song?.id === endedSong && songOpenRequest === endedRequest) queueNext();
+  }, 1500);
+}
+
+/* 前奏倒數：第一句前、或長間奏之後，下一句開口前 3 秒顯示 3、2、1 */
+function updateCountdown(t) {
+  const el = $("#lyr-count");
+  let show = "";
+  if (S.playing && S.lines.length) {
+    const k = lineIndexAt(t) + 1;
+    if (k < S.lines.length) {
+      const prevEnd = k > 0 ? (S.lines[k - 1].end || S.lines[k - 1].t) : 0;
+      const dt = (S.lines[k].t - t) / (S.speed || 1);
+      if (dt > 0 && dt <= 3 && (k === 0 || S.lines[k].t - prevEnd >= 5)) show = String(Math.ceil(dt));
+    }
+  }
+  if (el.textContent !== show) { el.textContent = show; el.hidden = !show; if (show) { el.classList.remove("pulse"); void el.offsetWidth; el.classList.add("pulse"); } }
+}
+
+/* 本場歌單：直播模式下播放超過 30 秒就記一筆 */
+LIVE.played = 0; LIVE.logged = null; LIVE.lastTick = 0;
+function setlistTick(t) {
+  const now = performance.now();
+  const dt = LIVE.lastTick ? Math.min(0.5, (now - LIVE.lastTick) / 1000) : 0;
+  LIVE.lastTick = now;
+  if (!LIVE.on || !S.playing || !S.song) return;
+  if (LIVE.logged === S.song.id) return;
+  LIVE.played += dt;
+  if (LIVE.played < 30) return;
+  LIVE.logged = S.song.id;
+  api("/api/setlist/add", { json: { id: S.song.id, title: S.song.title, artist: S.song.artist || "", key: S.key } }).catch(() => {});
+}
+async function openSetlist() {
+  try {
+    const r = await api("/api/setlist");
+    const d = r.started ? new Date(r.started * 1000) : new Date();
+    const head = `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")} 歌單`;
+    const lines = r.items.map((x, i) => {
+      const tm = new Date(x.t * 1000);
+      return `${i + 1}. ${String(tm.getHours()).padStart(2, "0")}:${String(tm.getMinutes()).padStart(2, "0")} ${x.title}${x.artist ? ` － ${x.artist}` : ""}${x.key ? `（KEY ${x.key > 0 ? "+" : ""}${x.key}）` : ""}`;
+    });
+    $("#sl-text").value = r.items.length ? [head, ...lines].join("\n") : "這場還沒有唱過的歌。";
+    $("#setlist-dlg").hidden = false;
+  } catch (e) { toast(e.message); }
+}
+$("#lv-setlist").onclick = openSetlist;
+$("#sl-copy").onclick = async () => {
+  try { await navigator.clipboard.writeText($("#sl-text").value); toast("已複製", 1500); }
+  catch { $("#sl-text").select(); document.execCommand("copy"); toast("已複製", 1500); }
+};
+$("#sl-new").onclick = async () => {
+  if (!confirm("清空本場歌單，開始新的一場？")) return;
+  await api("/api/setlist/clear", { json: {} }).catch(e => toast(e.message));
+  LIVE.logged = null; openSetlist();
+};
+$("#sl-close").onclick = () => { $("#setlist-dlg").hidden = true; };
+$("#setlist-dlg").addEventListener("click", e => { if (e.target.id === "setlist-dlg") $("#sl-close").click(); });
+
+/* 抽歌：從目前分類／搜尋結果裡、處理好（有旋律）的歌隨機抽一首，轉一下名字再進練唱 */
+let drawLast = null, drawing = false;
+$("#lib-draw").onclick = () => {
+  if (drawing) return;
+  let pool = LIB.songs.filter(s => songMatches(s) && (s.steps || {}).pitch);
+  if (!pool.length) return toast(LIB.q || LIB.cur !== "__all__" ? "目前顯示的歌裡沒有處理好的歌可以抽" : "歌曲庫裡還沒有處理好的歌");
+  if (pool.length > 1) pool = pool.filter(s => s.id !== drawLast);   // 不連續抽到同一首
+  const pick = pool[Math.floor(Math.random() * pool.length)];
+  const name = s => s.title + (s.artist ? ` － ${s.artist}` : "");
+  drawing = true; $("#lib-draw").disabled = true;
+  const t = $("#toast"); t.hidden = false; clearTimeout(toastTimer);
+  let n = 0;
+  const spin = () => {   // 越轉越慢，最後停在抽到的歌
+    if (n < 14 && pool.length > 1) {
+      t.textContent = "抽歌中… " + name(pool[Math.floor(Math.random() * pool.length)]);
+      setTimeout(spin, 40 + n++ * 12);
+      return;
+    }
+    t.textContent = "抽到：" + name(pick);
+    drawLast = pick.id;
+    setTimeout(() => {
+      drawing = false; $("#lib-draw").disabled = false;
+      toastTimer = setTimeout(() => (t.hidden = true), 2500);
+      openSong(pick.id);
+    }, 700);
+  };
+  spin();
+};
+
+function renderLiveSongs(box, list) {
+  const sortBy = LIB.sort || "new";
+  const cmp = (a, b) => (a || "").localeCompare(b || "", "zh-Hant");
+  if (sortBy === "title") list.sort((a, b) => cmp(a.title, b.title));
+  if (sortBy === "artist") list.sort((a, b) => (!a.artist - !b.artist) || cmp(a.artist, b.artist) || cmp(a.title, b.title));
+  if (!list.length) { box.innerHTML = `<div class="empty">${LIB.q ? "找不到符合的歌曲。" : "這個分類還沒有歌。"}</div>`; return; }
+  const frag = document.createDocumentFragment();
+  for (const s of list) {
+    const ok = !!(s.steps || {}).pitch;
+    const el = document.createElement("button");
+    el.className = "live-song" + (S.song && S.song.id === s.id ? " cur" : "");
+    el.disabled = !ok;
+    el.title = ok ? "開始這首" : "還沒處理好";
+    el.innerHTML = `<span class="t"></span><span class="a"></span>${ok ? `<span class="add" role="button" title="加進待唱清單">＋</span>` : ""}`;
+    $(".t", el).textContent = s.title;
+    $(".a", el).textContent = [s.artist, s.key ? `KEY ${s.key > 0 ? "+" : ""}${s.key}` : ""].filter(Boolean).join("・");
+    el.onclick = e => {
+      if (e.target.classList.contains("add")) { e.stopPropagation(); return queueAdd(s.id); }
+      openSong(s.id).then(() => renderSongs());
+    };
+    frag.appendChild(el);
+  }
+  box.appendChild(frag);
+}
+
 function renderSongs() {
   const box = $("#songs");
   box.innerHTML = "";
@@ -232,6 +549,7 @@ function renderSongs() {
     return;
   }
   const list = LIB.songs.filter(songMatches);
+  if (window.LIVE && LIVE.on) { renderQueue(); return renderLiveSongs(box, list); }
   const inCat = s => !(LIB.cur === "__none__" && s.category) && (LIB.cur === "__all__" || LIB.cur === "__none__" || s.category === LIB.cur);
   const sim = LIB.q ? LIB.similar.map(id => LIB.songs.find(s => s.id === id)).filter(s => s && inCat(s) && !list.includes(s)) : [];
   if (!list.length && !sim.length) {
@@ -789,6 +1107,7 @@ async function openSong(id, fromSongRequest = false) {
     ]);
     if (requestId !== songOpenRequest) return;
     S.song = song; titles[id] = song.title; syncGroupBtn();
+    if (window.LIVE) { LIVE.played = 0; LIVE.logged = null; }
     if (!fromSongRequest) {
       songRequestSync.selected(song);
       songRequestSync.endSelection();
@@ -973,7 +1292,8 @@ function songBus() {
     const lim = c.createDynamicsCompressor();
     lim.threshold.value = -1; lim.knee.value = 0; lim.ratio.value = 20;
     lim.attack.value = 0.002; lim.release.value = 0.15;
-    g.connect(lim).connect(c.destination);
+    S.master = c.createGain(); S.master.gain.value = S.masterVol ?? 1;   // 直播模式的音量
+    g.connect(lim).connect(S.master).connect(c.destination);
     S.bus = g;
   }
   S.bus.gain.value = Math.pow(10, normGain() / 20);
@@ -1043,6 +1363,40 @@ function startNode(k, buf, when, pos) {
   src.start(when, pos);
   S.nodes[k] = { src, g };
 }
+/* ------------------------------------------------------------ 1.7：旋律譜圖片 */
+(() => {
+  const sel = $("#sd-tonic");
+  NAMES.forEach((n, i) => { const o = document.createElement("option"); o.value = String(i); o.textContent = n; sel.appendChild(o); });
+})();
+let sheetFirst = "";
+$("#sheet-open").onclick = () => {
+  if (!S.song) return;
+  $("#sd-key-v").textContent = S.key ? `KEY ${S.key > 0 ? "+" : ""}${S.key}` : "原調";
+  $("#sd-msg").textContent = ""; $("#sd-show").hidden = true;
+  $("#sheet-dlg").hidden = false;
+};
+$("#sd-go").onclick = async () => {
+  if (!S.song) return;
+  const btn = $("#sd-go"), msg = $("#sd-msg");
+  btn.disabled = true; msg.textContent = "產生中…"; $("#sd-show").hidden = true;
+  try {
+    const lines = S.lines.map(l => ({ t: l.t, end: l.end, text: l.text,
+      chars: (l.chars || []).filter(u => !isPunct(u.c)).map(u => ({ c: u.c, t: u.t })) }));
+    const r = await api(`/api/songs/${S.song.id}/sheet`, { json: {
+      title: S.song.title, artist: S.song.artist || "", key: $("#sd-key").checked ? S.key : 0,
+      layout: $("#sd-layout").value, notation: $("#sd-notation").value, tonic: $("#sd-tonic").value, lines } });
+    sheetFirst = r.files[0] || "";
+    msg.textContent = `已存 ${r.files.length} 張圖片${r.tonic ? `（1 = ${r.tonic}）` : ""}到「下載」資料夾：${r.folder}`;
+    $("#sd-show").hidden = !sheetFirst;
+    if (sheetFirst) api("/api/reveal", { json: { path: sheetFirst } }).catch(() => {});   // 直接打開資料夾，不用自己找
+  } catch (e) { msg.textContent = e.message; }
+  finally { btn.disabled = false; }
+};
+$("#sheet-open2").onclick = () => $("#sheet-open").click();   // 旋律下方工具列的捷徑
+$("#sd-show").onclick = () => sheetFirst && api("/api/reveal", { json: { path: sheetFirst } }).catch(e => toast(e.message));
+$("#sd-close").onclick = () => { $("#sheet-dlg").hidden = true; };
+$("#sheet-dlg").addEventListener("click", e => { if (e.target.id === "sheet-dlg") $("#sd-close").click(); });
+
 function pause() {
   if (S.wantPlay) { S.wantPlay = false; $("#play").textContent = "播放"; }
   if (S.playing) S.t = cur();
@@ -2854,7 +3208,8 @@ function updateLyrics(t) {
     p = k === 0 ? 0 : clamp((k - 1 + clamp((t - prevT) / Math.max(0.05, nextT - prevT), 0, 1)) / n, 0, 1);
   }
   el.style.setProperty("--p", (S.charColor ? p * 100 : 0).toFixed(1) + "%");
-  const more = S.showMel ? [] : [["#lyr-next2", S.lines[i + 2] || null], ["#lyr-next3", S.lines[i + 3] || null]];
+  const five = !S.showMel || (window.LIVE && LIVE.on);   // 只看歌詞時、直播模式：一次顯示五行
+  const more = five ? [["#lyr-next2", S.lines[i + 2] || null], ["#lyr-next3", S.lines[i + 3] || null]] : [];
   for (const [id, l] of [["#lyr-prev", prev], ["#lyr-next", next], ...more]) {
     const node = $(id), tx = l ? l.text : (id === "#lyr-next" && !now && S.lines[0] ? S.lines[0].text : "");
     setLyrNode(node, tx);
@@ -2932,12 +3287,12 @@ function overlaySync() {
   const now = performance.now();
   const active = !$("#view-practice").hidden && S.song;
   const t = active ? cur() : 0;
-  const st = { sid: active ? S.song.id : null, playing: !!(active && S.playing), rate: S.speed || 1, color: !!S.charColor };
+  const st = { sid: active ? S.song.id : null, playing: !!(active && S.playing), rate: S.speed || 1, color: !!S.charColor, key: active ? S.key : 0 };
   const prev = OV.sent;
-  const changed = !prev || prev.sid !== st.sid || prev.playing !== st.playing || prev.rate !== st.rate || prev.color !== st.color
+  const changed = !prev || prev.sid !== st.sid || prev.playing !== st.playing || prev.rate !== st.rate || prev.color !== st.color || prev.key !== st.key
     || Math.abs(t - (prev.t + (prev.playing ? (now - prev.at) / 1000 * prev.rate : 0))) > 0.25;
   if (OV.busy || (!changed && now - OV.last < (st.playing ? 2000 : 5000))) return;
-  const body = { ...st, t, title: active ? S.song.title : "" };
+  const body = { ...st, t, title: active ? S.song.title : "", artist: active ? S.song.artist || "" : "" };
   if (active) {
     const lines = JSON.stringify(S.lines.map(l => ({ t: l.t, end: l.end, text: l.text, c: (l.chars || []).map(c => c.t), r: kanaSegs(l.text) })));
     if (!prev || prev.sid !== st.sid || lines !== OV.lines) { body.lines = JSON.parse(lines); OV.lines = lines; }
@@ -2948,17 +3303,17 @@ function overlaySync() {
 }
 
 /* 直播歌詞設定視窗 */
-const OVO = store.get("overlayOpts", { lines: "2", size: 56, pos: "bottom", align: "center", font: "huninn", color: "#f0a04a", bg: "none" });
+const OVO = Object.assign({ info: "off" }, store.get("overlayOpts", { lines: "2", size: 56, pos: "bottom", align: "center", font: "huninn", color: "#f0a04a", bg: "none" }));
 function overlayUrl() {
-  const q = new URLSearchParams({ lines: OVO.lines, size: OVO.size, pos: OVO.pos, align: OVO.align, font: OVO.font || "huninn", color: OVO.color.replace("#", ""), bg: OVO.bg });
+  const q = new URLSearchParams({ lines: OVO.lines, size: OVO.size, pos: OVO.pos, align: OVO.align, font: OVO.font || "huninn", color: OVO.color.replace("#", ""), bg: OVO.bg, info: OVO.info || "off" });
   return `${location.origin}/overlay?${q}`;
 }
 function syncOverlayDlg() {
-  for (const k of ["lines", "size", "pos", "align", "font", "color", "bg"]) $("#ov-" + k).value = OVO[k] || $("#ov-" + k).value;
+  for (const k of ["lines", "size", "pos", "align", "font", "color", "bg", "info"]) $("#ov-" + k).value = OVO[k] || $("#ov-" + k).value;
   $("#ov-size-v").textContent = OVO.size;
   $("#ov-url").value = overlayUrl();
 }
-for (const k of ["lines", "size", "pos", "align", "font", "color", "bg"]) {
+for (const k of ["lines", "size", "pos", "align", "font", "color", "bg", "info"]) {
   $("#ov-" + k).addEventListener("input", e => { OVO[k] = k === "size" ? +e.target.value : e.target.value; store.set("overlayOpts", OVO); syncOverlayDlg(); });
 }
 $("#ov-open").onclick = () => { syncOverlayDlg(); $("#overlay-dlg").hidden = false; };
@@ -2980,17 +3335,19 @@ function frame() {
   if (S.playing) {
     const t = cur();
     if (S.loopA != null && S.loopB != null && t >= S.loopB) { S.t = S.loopA; S.live = []; JG.done.clear(); play(); if (S.rec) splitRecording(); }
-    else if (t >= S.dur) { pause(); S.t = S.dur; }
+    else if (t >= S.dur) { pause(); S.t = S.dur; queueAtEnd(); }
     S.dirty = true;
   }
   micFrame();
+  setlistTick(S.playing ? cur() : 0);
+  if (S.playing) queuePrefetch(cur());
   overlaySync();
   tpSync();
   if (S.dirty && !$("#view-practice").hidden) {
     S.dirty = false;
     const t = cur();
     if (S.showMel) draw();
-    updateLyrics(t); highlightTiming(t);
+    updateLyrics(t); highlightTiming(t); updateCountdown(t);
     const tt = `${fmt(t)} / ${fmt(S.dur || 0, 0)}`;
     if (tt !== lastTimeText) { $("#time").textContent = tt; lastTimeText = tt; }
     if (document.activeElement !== $("#seek")) $("#seek").value = String(t);
@@ -3122,6 +3479,8 @@ async function openSettings(focusUsage) {
   $("#cfg-lang").value = cfg.lyrics_language || "";
   $("#cfg-tw").checked = !!cfg.convert_to_taiwan;
   $("#cfg-autorec").checked = !!cfg.auto_recognize_lyrics;
+  $("#cfg-hotkeys").checked = cfg.global_hotkeys !== false;
+  renderHotkeys();
   $("#cfg-font").value = cfg.font || "huninn";
   fillOutDevices(cfg.audio_out || "");
   $("#cfg-sep").value = cfg.separation_model;
@@ -3170,7 +3529,7 @@ async function saveSettings(extra = {}) {
       ollama_url: $("#cfg-url").value.trim(), ollama_model: $("#cfg-local-model").value.trim(),
       ollama_auto_model: $("#cfg-auto-model").checked,
       whisper_model: $("#cfg-whisper").value, lyrics_language: $("#cfg-lang").value,
-      convert_to_taiwan: $("#cfg-tw").checked, auto_recognize_lyrics: $("#cfg-autorec").checked, font: $("#cfg-font").value, audio_out: $("#cfg-out").value, separation_model: $("#cfg-sep").value.trim(),
+      convert_to_taiwan: $("#cfg-tw").checked, auto_recognize_lyrics: $("#cfg-autorec").checked, global_hotkeys: $("#cfg-hotkeys").checked, font: $("#cfg-font").value, audio_out: $("#cfg-out").value, separation_model: $("#cfg-sep").value.trim(),
       karaoke_model: $("#cfg-kara").value.trim(), karaoke_quality: $("#cfg-kq").value, karaoke_overlap: +$("#cfg-kov").value, auto_fine: $("#cfg-autofine").checked, pitch_model: $("#cfg-pitch").value,
       ...extra,
     };
@@ -3223,9 +3582,9 @@ $("#open-in-browser").onclick = () => api("/api/open-app", { method: "POST", jso
   .then(r => { $("#settings").hidden = true; toast(r.app ? "已開啟分享用視窗；Discord 分享時選那個視窗，第一次用麥克風時按「允許」" : "已用瀏覽器開啟練唱台；Discord 分享時選那個瀏覽器視窗", 6000); })
   .catch(e => toast(e.message));
 $("#btn-settings").onclick = openSettings;
-$("#cfg-close").onclick = () => ($("#settings").hidden = true);
+$("#cfg-close").onclick = () => { hkStop(); $("#settings").hidden = true; };
 $("#cfg-save").onclick = () => saveSettings();
-$("#settings").addEventListener("click", e => { if (e.target.id === "settings") $("#settings").hidden = true; });
+$("#settings").addEventListener("click", e => { if (e.target.id === "settings") { hkStop(); $("#settings").hidden = true; } });
 
 /* ------------------------------------------------------------ 啟動 */
 loadSongs().catch(e => toast(e.message));
@@ -3274,3 +3633,5 @@ songRequestEnabled.onchange = () => {
 };
 setInterval(() => songRequestSync.tick(), 1000);
 songRequestSync.tick();
+
+if (LIVE.on) setLive(true);   // 上次關掉時在直播模式，就直接進直播模式

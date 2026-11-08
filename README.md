@@ -17,9 +17,9 @@
 
 ## Windows 安裝（windows-ai-choice）
 
-到 [installer/releases](installer/releases) 下載 `LeihuLiantai-windows-ai-choice-1.6.9-Setup.exe`。安裝到可寫入的資料夾，首次開啟後選擇 AI 模式。安裝程式先準備 Python、音訊套件及 UVR／Whisper；這一步不會下載 Ollama 或本機語言模型。已有安裝請關閉程式，安裝到原位置並選「更新」，保留歌曲、錄音與設定。
+到 [installer/releases](installer/releases) 下載 `LeihuLiantai-windows-ai-choice-2.0.1-Setup.exe`。安裝到可寫入的資料夾，首次開啟後選擇 AI 模式。安裝程式先準備 Python、音訊套件及 UVR／Whisper；這一步不會下載 Ollama 或本機語言模型。已有安裝請關閉程式，安裝到原位置並選「更新」，保留歌曲、錄音與設定。
 
-已安裝 Windows AI 選擇版 1.4.4～1.6.9 者，使用 `LeihuLiantai-windows-ai-choice-1.6.9-Update.exe` 即可加入雙向選歌；先儲存錄音、關閉程式，再選原安裝資料夾。這個程式更新檔不下載或重裝 Python、套件、模型，也不修改歌曲、錄音與設定。尚未完成安裝或更舊版本請使用完整 Setup.exe。
+已安裝 Windows AI 選擇版 1.4.4～2.0.1 者，使用 `LeihuLiantai-windows-ai-choice-2.0.1-Update.exe` 即可加入雙向選歌；先儲存錄音、關閉程式，再選原安裝資料夾。這個程式更新檔不下載或重裝 Python、套件、模型，也不修改歌曲、錄音與設定。尚未完成安裝或更舊版本請使用完整 Setup.exe。
 
 本機模式按「儲存」後才會沿用或安裝 Ollama、自動選模、下載並驗證回覆。下載中斷可再次儲存續傳。Ollama 官方 Windows 安裝檔會驗證 Authenticode 簽章，不會繞過驗證。API 模式不需要 Ollama，也不會下載本機語言模型。
 
@@ -124,11 +124,11 @@ Windows 安裝檔以 `sh installer/build.sh` 建置，需要 NSIS。Mac 請使�
 
 對應記錄儲存在本機 `song-request-links.json`，不含密鑰且不會上傳 Git；更新程式不會覆蓋它。反向選歌會優先使用記住的歌名，或比對點歌系統的歌曲清單，保留原本歌名、點歌者與調音，避免新增重複項目。歌曲仍須先匯入並完成旋律分析；沒有新增下載或分析步驟。選歌當下不記錄歷史，唱完才依點歌系統規則記錄。建議只開啟一個同步視窗，兩個專案皆須更新到整合分支最新版。
 
-## 整合版 1.6.9
+## 整合版 2.0.1
 
-本版合併原作者 `LeihuTW/Leihu-singsing` 的 1.6.8（`2a41d30`），包含歌詞依歌聲自動校正、逐句調整獨立視窗及維持歌詞順序、逐句即時評分、合唱模式與最高品質重新辨識，修正 Whisper CUDA 預檢、全新安裝 PyTorch 相依套件及 Windows 黑色視窗閃爍。沿用前版依主唱／合音／伴奏組合計算音量平衡的功能、舊歌曲背景補量響度，以及新匯入預設先搜尋並套用線上歌詞（仍可在設定啟用自動辨識）。保留歌曲資料併發寫入保護與損壞資料自動修復、排隊效能、獨立分享視窗與音樂輸出裝置選擇。保留先前遠端開歌與 KEY、繁簡搜尋、表單匯入、FLAC 分軌與容量整理、預先下載、背景歌詞搜尋及精細處理。也包含先前日文標音、字體、USB 麥克風、錄音與匯出的上游改善。保留本機／Claude／Gemini／OpenAI 選擇、音訊強制對齊、YouTube 播放清單批量匯入、點歌系統雙向同步、YouTube 歌名自動比對及記住對應。
+本版合併原作者 `LeihuTW/Leihu-singsing` 的 2.0.0（`9703211`），新增直播模式、五行大字歌詞、待唱清單與預先準備 KEY、前奏倒數、本場歌單、可自訂的 Windows 全域快捷鍵、線上歌詞搜尋及手機／A4 旋律譜 PNG 匯出。直播模式保留點歌同步控制列；待唱清單的延遲切歌不會覆蓋 Twitch 或手動的新選擇。保留前版的歌詞依歌聲自動校正、逐句調整獨立視窗及維持歌詞順序、逐句即時評分、合唱模式與最高品質重新辨識，修正 Whisper CUDA 預檢、全新安裝 PyTorch 相依套件及 Windows 黑色視窗閃爍。沿用前版依主唱／合音／伴奏組合計算音量平衡的功能、舊歌曲背景補量響度，以及新匯入預設先搜尋並套用線上歌詞（仍可在設定啟用自動辨識）。保留歌曲資料併發寫入保護與損壞資料自動修復、排隊效能、獨立分享視窗與音樂輸出裝置選擇。保留先前遠端開歌與 KEY、繁簡搜尋、表單匯入、FLAC 分軌與容量整理、預先下載、背景歌詞搜尋及精細處理。也包含先前日文標音、字體、USB 麥克風、錄音與匯出的上游改善。保留本機／Claude／Gemini／OpenAI 選擇、音訊強制對齊、YouTube 播放清單批量匯入、點歌系統雙向同步、YouTube 歌名自動比對及記住對應。
 
-後續更新只發佈至本儲存庫的 `leihu-song-request-sync` 分支。已有 1.4.4～1.6.8 安裝可使用 1.6.9 Update.exe 更新程式，不用重新安裝執行環境；歌曲、API 設定與歌曲對應紀錄保留。上游的高品質分離模型首次使用會在背景下載約 900 MB；下載完成前先用標準模型，可在設定選「標準」沿用原本模型。重新辨識歌詞不會覆蓋手動編輯、各 AI 供應商或音訊強制對齊的歌詞。
+後續更新只發佈至本儲存庫的 `leihu-song-request-sync` 分支。已有 1.4.4～1.6.9 整合版安裝可使用 2.0.1 Update.exe 更新程式，不用重新安裝執行環境；歌曲、API 設定與歌曲對應紀錄保留。上游的高品質分離模型首次使用會在背景下載約 900 MB；下載完成前先用標準模型，可在設定選「標準」沿用原本模型。重新辨識歌詞不會覆蓋手動編輯、各 AI 供應商或音訊強制對齊的歌詞。
 
 日文標音使用本機 SudachiPy 字典。舊版直接使用 Update.exe 即可，首次啟用標音時會在背景下載約 45 MB 的 Python 字典套件，不必重裝主程式或另外安裝同步軟體；完整 Setup.exe 會預先安裝字典。內建字體及授權檔隨程式更新，不需安裝系統字體。
 
@@ -140,4 +140,6 @@ Windows 安裝檔以 `sh installer/build.sh` 建置，需要 NSIS。Mac 請使�
 
 1.6.9 的程式內更新提示與一鍵更新只讀取本儲存庫 `leihu-song-request-sync` 分支的 `installer/releases/update.json`，使用程式更新檔並核對大小及 SHA-256，不會安裝原作者版本而失去同步或 AI 選擇功能。已建立 `secure-runtime` 的安裝亦可使用。開發原始碼環境只顯示下載連結。建置時會產生對應的更新資訊，發佈時須將它與同版 Update.exe 一起提交。
 
-目前點歌系統上游已確認為 [sheng7337/twitch-song-request-system](https://github.com/sheng7337/twitch-song-request-system)（2026.11-1，00d83d0）。已將此版本合併至你的點歌系統 leihu-song-request-sync 分支，並更新 [404 相容修復包](repair/song-request-sync/README.md)，可直接套用在 E:\songRequest 的原作者 ZIP 安裝。只修點歌端，不需重裝練唱台 1.6.9；原生雷虎匯入、下載、歌詞與其他功能保留。
+目前點歌系統上游已確認為 [sheng7337/twitch-song-request-system](https://github.com/sheng7337/twitch-song-request-system)（2026.11-1，00d83d0）。已將此版本合併至你的點歌系統 leihu-song-request-sync 分支，並更新 [404 相容修復包](repair/song-request-sync/README.md)，可直接套用在 E:\songRequest 的原作者 ZIP 安裝。該修復只修改點歌端；使用整合版 2.0.1 亦可沿用；原生雷虎匯入、下載、歌詞與其他功能保留。
+
+直播模式的待唱清單載入下一首時，也會沿用雙向同步傳送到點歌系統；保留已點歌曲的點歌者與 KEY。旋律譜匯出至系統「下載／雷虎練唱台／歌名 旋律譜（手機或 A4）」資料夾，不改寫歌曲與歌詞。全域快捷鍵使用 Windows 內建 RegisterHotKey，瀏覽器開啟時可使用畫面上的直播控制；不需額外快捷鍵軟體。快捷鍵與本場歌單分別儲存於 config.json 和 setlist.json，更新時保留。

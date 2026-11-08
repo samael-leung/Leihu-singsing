@@ -32,3 +32,6 @@ song-request-links.json
 song-request-links.json.tmp
 .appwin/
 .webview/
+hotkeys_status.json
+.hotkeys_pause
+setlist.json

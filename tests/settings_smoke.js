@@ -15,7 +15,7 @@ const cfg = {ai_mode:'local',api_provider:'openai',ai_setup_complete:false,ollam
 let saved, appliedFont, prepared=0, sinkCalls=0;
 const context = vm.createContext({
   AudioContext:class {setSinkId(){}},document:{createElement:()=>({})},
-  outDevices:async()=>[{label:'USB Output'}],applySink(){sinkCalls++;},
+  outDevices:async()=>[{label:'USB Output'}],applySink(){sinkCalls++;},renderHotkeys:async()=>{},hkStop(){},
   $: selector => {const element=elements[selector.slice(1)];assert.ok(element,selector);return element;},
   api: async (path,opts) => {
     if(path==='/api/config' && opts) {saved=opts.json;Object.assign(cfg,saved);return {...cfg};}

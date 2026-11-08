@@ -6,10 +6,12 @@
 """
 from __future__ import annotations
 
+import json
 import os
 import socket
 import subprocess
 import sys
+import threading
 import time
 import traceback
 import urllib.request
@@ -131,6 +133,76 @@ class Api:
         return True
 
 
+# 全域快捷鍵（練唱台不在最前面也能用，Stream Deck／巨集鍵盤可以直接綁）。
+# 按鍵定義在 hotkeys.py；設定改了（config.json）或設定畫面正在錄新按鍵時，會自動重新註冊，不用重開
+HOTKEY_STATUS = ROOT / "hotkeys_status.json"
+HOTKEY_PAUSE = ROOT / ".hotkeys_pause"
+
+
+def global_hotkeys(window) -> None:
+    """用 Windows 的 RegisterHotKey 註冊全域快捷鍵，按下時呼叫網頁的 liveHotkey()。
+    某個組合被其他程式佔用時只略過那一個，結果寫在 hotkeys_status.json 給設定畫面顯示。"""
+    import ctypes
+    from ctypes import wintypes
+    import hotkeys as HK
+    user32 = ctypes.windll.user32
+    reg: dict[int, str] = {}
+
+    def unregister():
+        for i in list(reg):
+            user32.UnregisterHotKey(None, i)
+        reg.clear()
+
+    def register():
+        try:
+            cfg = json.loads((ROOT / "config.json").read_text("utf-8"))
+        except (OSError, ValueError):
+            cfg = {}
+        ok, failed = [], []
+        if cfg.get("global_hotkeys") is not False:
+            for n, (act, combo) in enumerate(HK.current(cfg).items(), 1):
+                p = HK.parse(combo)
+                if not p:
+                    continue
+                if user32.RegisterHotKey(None, n, p[0] | 0x4000, p[1]):   # 0x4000：按住不放不重複觸發
+                    reg[n] = act
+                    ok.append(act)
+                else:
+                    failed.append(act)
+                    print("全域快捷鍵註冊失敗（可能被其他程式佔用）：", act, combo, flush=True)
+        try:
+            HOTKEY_STATUS.write_text(json.dumps({"ok": ok, "failed": failed, "at": time.time()}), "utf-8")
+        except OSError:
+            pass
+
+    msg = wintypes.MSG()
+    sig, last = None, 0.0
+    while True:
+        while user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, 1):   # PM_REMOVE
+            if msg.message == 0x0312 and msg.wParam in reg:   # WM_HOTKEY
+                try:
+                    window.evaluate_js(f"window.liveHotkey && window.liveHotkey('{reg[msg.wParam]}')")
+                except Exception:
+                    traceback.print_exc()
+        now = time.time()
+        if now - last > 0.4:
+            last = now
+            try:
+                cfg_m = (ROOT / "config.json").stat().st_mtime_ns
+            except OSError:
+                cfg_m = 0
+            try:   # 設定畫面正在錄新按鍵：暫時放開全部快捷鍵，按下的組合才傳得到畫面（兩分鐘後自動恢復）
+                paused = now - HOTKEY_PAUSE.stat().st_mtime < 120
+            except OSError:
+                paused = False
+            if (cfg_m, paused) != sig:
+                sig = (cfg_m, paused)
+                unregister()
+                if not paused:
+                    register()
+        time.sleep(0.03)
+
+
 class _Existing:
     def terminate(self): pass
     def wait(self, *_): pass
@@ -166,7 +238,7 @@ def main():
             webbrowser.open(base + "/")
             proc.wait()
             return
-        version = "1.6.9"
+        version = "2.0.1"
         try:
             version = (ROOT / "VERSION").read_text("utf-8").strip() or version
         except OSError:
@@ -177,6 +249,8 @@ def main():
         )
         done: list = []
         window.events.loaded += lambda: allow_microphone(window, base, done)
+        if sys.platform == "win32":
+            threading.Thread(target=global_hotkeys, args=(window,), daemon=True, name="hotkeys").start()
         webview.start(private_mode=False, storage_path=str(ROOT / ".webview"))
     finally:
         proc.terminate()

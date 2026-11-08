@@ -24,8 +24,10 @@ import model_setup as MS
 import pipeline as P
 import share as SH
 import song_request
+import score_sheet as SS   # 1.7：旋律譜匯出
+import hotkeys as HK   # 2.0：自訂全域快捷鍵
 
-VERSION = "1.6.9"
+VERSION = "2.0.1"
 HOST, PORT = "127.0.0.1", int(os.environ.get("LIANTAI_PORT", "8765"))
 app = Flask(__name__, static_folder=str(P.ROOT / "static"), static_url_path="/static")
 app.config["MAX_CONTENT_LENGTH"] = 1024 * 1024 * 1024
@@ -617,6 +619,19 @@ def queue_max(sid: str) -> str:
         except Exception as e:
             P.log_error("queue_max prerender", e)
     return jobs.submit("process", sid, run, label="max")
+
+
+@app.post("/api/songs/<sid>/sheet")
+def export_sheet(sid):
+    """1.7：把旋律＋歌詞畫成一頁頁的圖片（旋律譜），存到下載資料夾。"""
+    d = P.song_dir(sid)
+    body = request.get_json(force=True) or {}
+    meta = P.read_meta(d)
+    body.setdefault("title", meta.get("title", ""))
+    layout = "A4" if body.get("layout") == "a4" else "手機"
+    folder = P.downloads_dir() / P.APP_NAME / f"{SS.safe_name(meta.get('title', '旋律譜'))} 旋律譜（{layout}）"
+    files, tonic = SS.render(d, body, folder)
+    return jsonify(files=[str(f) for f in files], folder=str(folder), tonic=tonic)
 
 
 @app.get("/api/songs/<sid>/pitch")
@@ -1367,7 +1382,8 @@ def overlay_set():
             OVERLAY["lines"] = d["lines"] if isinstance(d["lines"], list) else []
         if "lines" in d or d.get("sid") != OVERLAY["sid"]:
             OVERLAY["ver"] += 1
-        OVERLAY.update(sid=d.get("sid"), title=str(d.get("title") or ""), t=float(d.get("t") or 0),
+        OVERLAY.update(sid=d.get("sid"), title=str(d.get("title") or ""), artist=str(d.get("artist") or ""),
+                       key=int(d.get("key") or 0), t=float(d.get("t") or 0),
                        playing=bool(d.get("playing")), rate=float(d.get("rate") or 1),
                        color=bool(d.get("color", True)), at=time.time())
     return jsonify(ok=True)
@@ -1378,11 +1394,105 @@ def overlay_get():
     with _ov_lock:
         o = dict(OVERLAY)
     t = o["t"] + ((time.time() - o["at"]) * o["rate"] if o["playing"] else 0)
-    out = {"sid": o["sid"], "title": o["title"], "t": t, "playing": o["playing"], "rate": o["rate"],
+    out = {"sid": o["sid"], "title": o["title"], "artist": o.get("artist", ""), "key": o.get("key", 0),
+           "t": t, "playing": o["playing"], "rate": o["rate"],
            "color": o["color"], "ver": o["ver"]}
     if request.args.get("ver") != str(o["ver"]):
         out["lines"] = o["lines"]
     return jsonify(out)
+
+
+# ---------------------------------------------------------------- 全域快捷鍵設定（2.0）
+@app.get("/api/hotkeys")
+def hotkeys_get():
+    cfg = P.load_config()
+    try:
+        status = json.loads((P.ROOT / "hotkeys_status.json").read_text("utf-8"))
+    except (OSError, ValueError):
+        status = None   # 不是用桌面版開的（瀏覽器），或還沒註冊過
+    return jsonify(actions=[{"id": a, "label": l, "default": d} for a, l, d in HK.ACTIONS],
+                   current=HK.current(cfg), enabled=cfg.get("global_hotkeys") is not False, status=status)
+
+
+@app.post("/api/hotkeys")
+@_locked
+def hotkeys_set():
+    combos = (request.get_json(force=True) or {}).get("combos") or {}
+    if not isinstance(combos, dict):
+        raise P.UserError("快捷鍵設定必須是功能與組合鍵的對應。")
+    cfg = P.load_config()
+    cur = HK.current(cfg)
+    for a, v in combos.items():
+        if a not in HK.ACTION_IDS:
+            continue
+        v = str(v or "").strip()
+        if v and not HK.parse(v):
+            raise P.UserError(f"「{v}」不能當快捷鍵：要加 Ctrl、Alt、Shift 或 Win（F13～F24 可以單獨使用）")
+        cur[a] = v
+    used = [HK.parse(v) for v in cur.values() if v]
+    if len(used) != len(set(used)):
+        dup = next(v for v in cur.values() if v and used.count(HK.parse(v)) > 1)
+        raise P.UserError(f"「{dup}」設定給了兩個功能，請換一個")
+    cfg["hotkeys"] = cur
+    P.save_config(cfg)
+    return jsonify(current=cur)
+
+
+@app.post("/api/hotkeys/pause")
+def hotkeys_pause():
+    """設定畫面錄新按鍵時，請桌面程式暫時放開全部快捷鍵（不然按下去會直接觸發，畫面收不到）。"""
+    f = P.ROOT / ".hotkeys_pause"
+    if (request.get_json(force=True) or {}).get("on"):
+        f.write_text("1", "utf-8")
+    else:
+        f.unlink(missing_ok=True)
+    return jsonify(ok=True)
+
+
+# ---------------------------------------------------------------- 本場歌單（1.7）
+SETLIST_PATH = P.ROOT / "setlist.json"
+_SETLIST_LOCK = threading.Lock()
+SETLIST_GAP = 6 * 3600   # 距離上一首超過 6 小時就當成新的一場
+
+
+def _setlist_read() -> dict:
+    try:
+        d = json.loads(SETLIST_PATH.read_text("utf-8"))
+        if isinstance(d.get("items"), list):
+            return d
+    except (OSError, ValueError):
+        pass
+    return {"started": None, "items": []}
+
+
+@app.get("/api/setlist")
+def setlist_get():
+    with _SETLIST_LOCK:
+        return jsonify(_setlist_read())
+
+
+@app.post("/api/setlist/add")
+def setlist_add():
+    b = request.get_json(force=True) or {}
+    now = time.time()
+    item = {"t": now, "id": str(b.get("id", ""))[:20], "title": str(b.get("title", ""))[:200],
+            "artist": str(b.get("artist", ""))[:120], "key": int(b.get("key") or 0)}
+    with _SETLIST_LOCK:
+        d = _setlist_read()
+        if not d["items"] or now - d["items"][-1]["t"] > SETLIST_GAP:
+            d = {"started": now, "items": []}
+        last = d["items"][-1] if d["items"] else None
+        if not (last and last["id"] == item["id"] and now - last["t"] < 600):   # 同一首十分鐘內不重複記
+            d["items"].append(item)
+        P.atomic_write_text(SETLIST_PATH, json.dumps(d, ensure_ascii=False))
+    return jsonify(ok=True)
+
+
+@app.post("/api/setlist/clear")
+def setlist_clear():
+    with _SETLIST_LOCK:
+        P.atomic_write_text(SETLIST_PATH, json.dumps({"started": None, "items": []}))
+    return jsonify(ok=True)
 
 
 @app.post("/api/open-overlay")
@@ -1555,6 +1665,38 @@ def watch_parent() -> None:
     threading.Thread(target=wait, daemon=True).start()
 
 
+def remove_duet_leftovers() -> None:
+    """1.7.0 測試版的「男女對唱」已經拿掉：清掉它留下的模型（約 530 MB）、每首歌的男聲／女聲軌與聲部標記。"""
+    import shutil
+    for pat in ("model_chorus_bs_roformer_ep_267_sdr_24.1275.ckpt*", "config_chorus_male_female_bs_roformer.yaml*"):
+        for f in P.MODELS.glob(pat):
+            try:
+                f.unlink()
+            except OSError:
+                pass
+    try:
+        dirs = [d for d in P.LIB.iterdir() if d.is_dir()]
+    except OSError:
+        return
+    for d in dirs:
+        found = False
+        for f in [*d.glob("male.*"), *d.glob("female.*"), *d.glob("parts.json"), *d.glob("v*/male.*"), *d.glob("v*/female.*")]:
+            try:
+                f.unlink() if f.is_file() else shutil.rmtree(f, ignore_errors=True)
+                found = True
+            except OSError:
+                pass
+        if found and (d / "meta.json").exists():
+            try:
+                with P._META_LOCK:
+                    m = P.read_meta(d)
+                    if "parts_stems" in m:
+                        m.pop("parts_stems", None)
+                        P.write_meta(d, m)
+            except Exception as e:
+                P.log_error("remove_duet_leftovers", e)
+
+
 def loudness_backfill() -> None:
     """舊歌曲在背景補量各音軌組合的響度（每首約 2～3 秒）。
     有處理工作在跑時先暫停，不和分軌、辨識搶資源；沒補到的歌第一次開啟時會當場量。"""
@@ -1692,6 +1834,7 @@ def main():
     resume_downloads()
     threading.Thread(target=prefetcher, daemon=True, name="prefetch").start()
     threading.Thread(target=loudness_backfill, daemon=True, name="loudness").start()
+    threading.Thread(target=remove_duet_leftovers, daemon=True, name="cleanup").start()
     threading.Thread(target=check_update, daemon=True, name="update").start()
     url = f"http://{HOST}:{PORT}"
     print(f"\n  {P.APP_NAME} {VERSION} 已啟動：{url}\n  關閉這個視窗就會結束程式。\n")

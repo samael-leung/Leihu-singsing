@@ -4,7 +4,7 @@ set -e
 cd "$(dirname "$0")"
 app_version=$(tr -d "\r\n" < ../VERSION)
 rm -rf payload && mkdir -p payload/static payload/setup out
-cp ../app.py ../song_request.py ../youtube_playlist.py ../forced_alignment.py ../alignment_worker.py ../desktop.py ../installer.py ../pipeline.py ../ai_api.py ../ollama_setup.py ../model_setup.py ../share.py ../VERSION ../requirements-win.txt payload/
+cp ../app.py ../song_request.py ../youtube_playlist.py ../forced_alignment.py ../alignment_worker.py ../desktop.py ../installer.py ../pipeline.py ../ai_api.py ../ollama_setup.py ../model_setup.py ../share.py ../score_sheet.py ../hotkeys.py ../VERSION ../requirements-win.txt payload/
 cp ../static/index.html ../static/app.js ../static/song-request.js ../static/style.css ../static/help.html ../static/overlay.html ../static/timing.html ../static/icon.ico ../static/kenzi.png ../static/linepay.png ../static/song-list-template.csv payload/static/
 mkdir -p payload/static/fonts && cp ../static/fonts/* payload/static/fonts/
 cp ../static/help.html payload/使用說明.html
