@@ -75,6 +75,7 @@ const mc = () => (micCtx ||= new (window.AudioContext || window.webkitAudioConte
 
 /* ------------------------------------------------------------ 導覽 */
 function show(view) {
+  if (window.LIVE && LIVE.on && view !== "about") { liveLayout(); if (view === "practice") renderSongs(); return; }   // 直播模式：歌曲庫和歌詞一起顯示
   $("#view-lib").hidden = view !== "lib";
   $("#view-practice").hidden = view !== "practice";
   $("#view-about").hidden = view !== "about";
@@ -224,6 +225,46 @@ function songMatches(s) {
     s.lyrics_online && s.lyrics_online.artist].filter(Boolean).join(" ").toLowerCase();
   return LIB.q.split(/\s+/).every(w => hay.includes(w));
 }
+/* ------------------------------------------------------------ 直播模式（精簡版面）
+   左邊歌曲清單（搜尋、分類、抽歌），右邊大字歌詞＋播放列＋原曲／卡拉OK、音量、歌詞即時調整。
+   只是同一個畫面換版面，所有功能（KEY、背景處理、直播歌詞）照常運作 */
+var LIVE = { on: store.get("liveMode", false) };
+function liveLayout() {
+  document.body.classList.toggle("live", LIVE.on);
+  $("#live-toggle").classList.toggle("cur", LIVE.on);
+  if (LIVE.on) { $("#view-lib").hidden = false; $("#view-practice").hidden = false; $("#view-about").hidden = true; }
+  if (!S.song) { $("#p-title").textContent = LIVE.on ? "從左邊選一首歌" : ""; }
+  S.dirty = true;
+  setTimeout(fitLyrNow, 50);
+}
+function setLive(on) {
+  LIVE.on = on; store.set("liveMode", on);
+  if (on) { liveLayout(); renderSongs(); }
+  else { document.body.classList.remove("live"); $("#live-toggle").classList.remove("cur"); show(S.song ? "practice" : "lib"); renderSongs(); }
+}
+$("#live-toggle").onclick = () => setLive(!LIVE.on);
+$$("[data-live-preset]").forEach(b => (b.onclick = () => $(`[data-preset="${b.dataset.livePreset}"]`).click()));
+/* 音量：只影響歌曲（主唱／合音／伴奏），導引音和麥克風不受影響 */
+S.masterVol = store.get("masterVol", 1);
+function syncLiveVol() { $("#live-vol").value = String(S.masterVol); $("#live-vol-v").textContent = Math.round(S.masterVol * 100); if (S.master) S.master.gain.value = S.masterVol; }
+$("#live-vol").oninput = e => { S.masterVol = +e.target.value; store.set("masterVol", S.masterVol); syncLiveVol(); };
+syncLiveVol();
+function liveAdjust(which, d) {
+  if (!S.song || !S.lines.length) return toast("這首歌還沒有含時間的歌詞");
+  const t = cur(), from = $("#lv-from").checked;
+  let k = Math.max(0, lineIndexAt(t));
+  if (which === "next") { k = lineIndexAt(t) + 1; if (k >= S.lines.length) return toast("後面沒有歌詞了"); }
+  const l = S.lines[k];
+  const nt = d == null ? t - 0.08 * S.speed : l.t + d;
+  if (from) shiftFrom(k, nt);
+  else { shiftLine(l, nt); saveLyricsSoon(); toast(`「${l.text.slice(0, 14)}」→ ${fmt(l.t)}`, 1800); }
+}
+$("#lv-now").onclick = () => liveAdjust("cur");
+$("#lv-next").onclick = () => liveAdjust("next");
+$("#lv-minus").onclick = () => liveAdjust("cur", -0.1);
+$("#lv-plus").onclick = () => liveAdjust("cur", 0.1);
+$("#lv-pop").onclick = () => $("#timing-pop").click();
+
 /* 抽歌：從目前分類／搜尋結果裡、處理好（有旋律）的歌隨機抽一首，轉一下名字再進練唱 */
 let drawLast = null, drawing = false;
 $("#lib-draw").onclick = () => {
@@ -253,6 +294,28 @@ $("#lib-draw").onclick = () => {
   spin();
 };
 
+function renderLiveSongs(box, list) {
+  const sortBy = LIB.sort || "new";
+  const cmp = (a, b) => (a || "").localeCompare(b || "", "zh-Hant");
+  if (sortBy === "title") list.sort((a, b) => cmp(a.title, b.title));
+  if (sortBy === "artist") list.sort((a, b) => (!a.artist - !b.artist) || cmp(a.artist, b.artist) || cmp(a.title, b.title));
+  if (!list.length) { box.innerHTML = `<div class="empty">${LIB.q ? "找不到符合的歌曲。" : "這個分類還沒有歌。"}</div>`; return; }
+  const frag = document.createDocumentFragment();
+  for (const s of list) {
+    const ok = !!(s.steps || {}).pitch;
+    const el = document.createElement("button");
+    el.className = "live-song" + (S.song && S.song.id === s.id ? " cur" : "");
+    el.disabled = !ok;
+    el.title = ok ? "開始這首" : "還沒處理好";
+    el.innerHTML = `<span class="t"></span><span class="a"></span>`;
+    $(".t", el).textContent = s.title;
+    $(".a", el).textContent = [s.artist, s.key ? `KEY ${s.key > 0 ? "+" : ""}${s.key}` : ""].filter(Boolean).join("・");
+    el.onclick = () => openSong(s.id).then(() => renderSongs());
+    frag.appendChild(el);
+  }
+  box.appendChild(frag);
+}
+
 function renderSongs() {
   const box = $("#songs");
   box.innerHTML = "";
@@ -261,6 +324,7 @@ function renderSongs() {
     return;
   }
   const list = LIB.songs.filter(songMatches);
+  if (window.LIVE && LIVE.on) return renderLiveSongs(box, list);
   const inCat = s => !(LIB.cur === "__none__" && s.category) && (LIB.cur === "__all__" || LIB.cur === "__none__" || s.category === LIB.cur);
   const sim = LIB.q ? LIB.similar.map(id => LIB.songs.find(s => s.id === id)).filter(s => s && inCat(s) && !list.includes(s)) : [];
   if (!list.length && !sim.length) {
@@ -915,7 +979,8 @@ function songBus() {
     const lim = c.createDynamicsCompressor();
     lim.threshold.value = -1; lim.knee.value = 0; lim.ratio.value = 20;
     lim.attack.value = 0.002; lim.release.value = 0.15;
-    g.connect(lim).connect(c.destination);
+    S.master = c.createGain(); S.master.gain.value = S.masterVol ?? 1;   // 直播模式的音量
+    g.connect(lim).connect(S.master).connect(c.destination);
     S.bus = g;
   }
   S.bus.gain.value = Math.pow(10, normGain() / 20);
@@ -3125,3 +3190,5 @@ $("#settings").addEventListener("click", e => { if (e.target.id === "settings") 
 loadSongs().catch(e => toast(e.message));
 pollJobs();
 requestAnimationFrame(frame);
+
+if (LIVE.on) setLive(true);   // 上次關掉時在直播模式，就直接進直播模式

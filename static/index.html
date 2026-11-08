@@ -16,6 +16,7 @@
     <button id="nav-about" class="tab">關於開發者</button>
   </nav>
   <span class="spacer"></span>
+  <button id="live-toggle" class="tab" title="直播時用：只留歌曲清單和大字歌詞，加上播放、KEY、音量和歌詞即時調整">直播模式</button>
   <a id="update-chip" class="chip new" href="https://github.com/LeihuTW/Leihu-singsing/releases/latest" data-ext hidden title="更新會保留歌曲庫、錄音和設定"></a>
   <button id="claude-chip" class="chip" title="查看 Claude 用量">Claude：未設定</button>
   <button id="btn-settings" class="ghost">設定</button>
@@ -124,6 +125,24 @@
           <button id="ov-open" title="給 OBS 等直播軟體用的去背歌詞畫面">直播歌詞</button>
         </span>
         <span class="grp"><label for="zoom">視窗</label><input id="zoom" type="range" min="3" max="30" step="1" value="8"></span>
+      </div>
+    </div>
+
+    <div id="live-bar" class="live-bar">
+      <div class="row">
+        <button data-live-preset="orig">原曲</button>
+        <button data-live-preset="karaoke">卡拉OK</button>
+        <label class="lv-vol">音量 <input id="live-vol" type="range" min="0" max="1.5" step="0.01" value="1" aria-label="音量"><span id="live-vol-v" class="num">100</span></label>
+      </div>
+      <div class="row">
+        <b>歌詞調整</b>
+        <button id="lv-now" title="播放到這句開口時按：目前這句對到現在的位置">這句對準</button>
+        <button id="lv-next" title="歌詞慢半拍時用：歌手開口唱、畫面還停在上一句時按，把下一句對到現在的位置">下一句對準</button>
+        <button id="lv-minus" title="目前這句提早 0.1 秒">−0.1</button>
+        <button id="lv-plus" title="目前這句延後 0.1 秒">＋0.1</button>
+        <label class="hint"><input id="lv-from" type="checkbox" checked> 後面的句子一起移動</label>
+        <button id="lv-pop" class="ghost" title="另開視窗逐句調整">逐句調整視窗</button>
+        <span class="hint">調整會自動儲存</span>
       </div>
     </div>
 

@@ -381,3 +381,38 @@ a.tab { text-decoration: none; font-size: 14px; }
 .judge .miss .g { color: #9aa3ad; }
 @keyframes jpop { 0% { transform: scale(.5); opacity: 0; } 12% { transform: scale(1.18); opacity: 1; } 24% { transform: scale(1); }
   75% { opacity: 1; transform: translateY(0); } 100% { opacity: 0; transform: translateY(-8px); } }
+
+/* ------------------------------------------------------------ 直播模式（精簡版面） */
+.live-bar { display: none; }
+body.live main { max-width: none; padding: 10px 12px; display: grid; grid-template-columns: minmax(240px, 300px) minmax(0, 1fr); gap: 12px;
+  height: calc(100vh - 56px); box-sizing: border-box; }
+body.live #view-lib { display: flex; flex-direction: column; min-height: 0; }
+body.live #view-lib > :not(.lib-tools):not(#songs) { display: none !important; }
+body.live .lib-tools { flex-direction: column; align-items: stretch; gap: 6px; margin: 0 0 6px; }
+body.live .lib-tools .lib-right { display: flex; flex-wrap: wrap; gap: 6px; }
+body.live .lib-tools .lib-right input { flex: 1 1 100%; order: -1; }
+body.live .cats { flex-wrap: wrap; max-height: 64px; overflow: auto; }
+body.live #songs { flex: 1; overflow: auto; border: 1px solid var(--line); border-radius: 10px; }
+.live-song { display: block; width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; padding: 7px 10px; background: none; }
+.live-song:hover:not(:disabled) { background: var(--shade); }
+.live-song.cur { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.live-song .t { display: block; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.live-song .a { display: block; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.live-song:disabled { opacity: .45; }
+body.live #view-practice { display: flex; flex-direction: column; min-height: 0; gap: 8px; }
+body.live #view-practice > .panels, body.live #back, body.live #p-chips { display: none !important; }
+body.live .p-head { margin: 0; }
+body.live .p-head h1 { font-size: 20px; }
+body.live .stage { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+body.live .stage .roll-wrap, body.live .stage .split { display: none; }
+body.live .stage .lyr { flex: 1; border-top: 0; display: flex; flex-direction: column; justify-content: center; gap: .35em; padding: 24px 72px; }
+body.live .stage .lyr-more { display: block; }
+body.live .stage .lyr-prev { font-size: calc(22px * var(--ls)); }
+body.live .stage .lyr-now { font-size: calc(clamp(32px, 4.6vw, 60px) * var(--ls)); align-self: center; }
+body.live .stage .lyr-next { font-size: calc(24px * var(--ls)); }
+body.live .transport > .grp:not(:has(#key-sel)), body.live #skip-intro, body.live .transport > label.hint { display: none; }
+body.live .live-bar { display: grid; gap: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; }
+body.live .live-bar .row { flex-wrap: wrap; gap: 6px; align-items: center; }
+.lv-vol { display: inline-flex; align-items: center; gap: 6px; margin-left: 8px; }
+.lv-vol input { width: 160px; }
+@media (max-width: 760px) { body.live main { grid-template-columns: 1fr; height: auto; } body.live #songs { max-height: 30vh; } }
