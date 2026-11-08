@@ -435,3 +435,14 @@ body.live .live-queue .row { gap: 6px; align-items: center; }
 .lyr-count.pulse { animation: cpulse .9s ease-out; }
 @keyframes cpulse { 0% { transform: translateX(-50%) scale(1.5); opacity: .3; } 30% { transform: translateX(-50%) scale(1); opacity: 1; } }
 body.live .lyr-count { font-size: calc(48px * var(--ls)); }
+
+/* 自訂快捷鍵 */
+.hk-field { display: grid; gap: 6px; }
+.hk-list { display: grid; gap: 4px; }
+.hk-row { display: grid; grid-template-columns: minmax(8em, 1fr) minmax(10em, auto) auto auto minmax(0, auto); gap: 6px; align-items: center; }
+.hk-row .hk-key { font-family: var(--mono); font-size: 13px; min-width: 12em; }
+.hk-row .hk-key.rec { border-color: var(--accent); color: var(--accent); }
+.hk-row .hk-st { color: var(--bad); font-size: 12px; }
+@media (max-width: 640px) { .hk-row { grid-template-columns: 1fr auto auto; } .hk-row .lb { grid-column: 1 / -1; } }
+.hk-field > label.row { display: flex; align-items: center; gap: 6px; }
+.hk-row .hk-key { justify-self: stretch; }

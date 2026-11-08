@@ -8,7 +8,7 @@
 </head>
 <body>
 <header class="bar">
-  <span class="logo">雷虎練唱台<small id="ver">1.7.0</small></span>
+  <span class="logo">雷虎練唱台<small id="ver">2.0.0</small></span>
   <nav class="row">
     <button id="nav-lib" class="tab cur">歌曲庫</button>
     <button id="nav-practice" class="tab" disabled>練唱</button>
@@ -150,6 +150,7 @@
         <button id="lv-plus" title="目前這句延後 0.1 秒">＋0.1</button>
         <label class="hint"><input id="lv-from" type="checkbox" checked> 後面的句子一起移動</label>
         <button id="lv-pop" class="ghost" title="另開視窗逐句調整">逐句調整視窗</button>
+        <button id="lv-search" class="ghost" title="歌詞不對、或整份換掉：搜尋線上歌詞（LRCLIB、網易雲、酷狗）">搜尋線上歌詞</button>
         <span class="spacer"></span>
         <button id="lv-setlist" class="ghost" title="這場直播唱過的歌（直播模式下播放超過 30 秒會記下來）">本場歌單</button>
         <span class="hint">調整會自動儲存</span>
@@ -473,6 +474,14 @@
   </div>
 </div>
 
+<div id="ls-dlg" class="modal" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="lsd-title">
+    <h1 id="lsd-title">搜尋線上歌詞</h1>
+    <div id="lsd-body"></div>
+    <div class="row" style="justify-content:flex-end"><button id="lsd-close" class="ghost">關閉</button></div>
+  </div>
+</div>
+
 <div id="setlist-dlg" class="modal" hidden>
   <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sl-title">
     <h1 id="sl-title">本場歌單</h1>
@@ -510,7 +519,11 @@
         <option value="">自動判斷（建議）</option><option value="zh">中文</option>
         <option value="en">英文</option><option value="ja">日文</option><option value="ko">韓文</option>
       </select></label>
-    <label class="row"><input id="cfg-hotkeys" type="checkbox"> 全域快捷鍵：練唱台不在最前面時也能用 Ctrl+Alt+按鍵操作（清單見使用說明「直播模式」；重開練唱台後生效）</label>
+    <div class="field hk-field">
+      <label class="row"><input id="cfg-hotkeys" type="checkbox"> 全域快捷鍵：練唱台不在最前面時也能用（Stream Deck、巨集鍵盤可以直接綁）</label>
+      <div id="hk-list" class="hk-list"></div>
+      <span id="hk-msg" class="hint">點按鍵欄位後按下新的組合（要加 Ctrl、Alt、Shift 或 Win；F13～F24 可以單獨使用），Esc 取消。改完馬上生效，只控制桌面版視窗。</span>
+    </div>
     <label class="row"><input id="cfg-autorec" type="checkbox"> 匯入時自動辨識歌詞（關閉時直接套用線上搜尋到的第一個版本，處理也比較快）</label>
     <label class="row"><input id="cfg-tw" type="checkbox"> 中文歌詞轉成台灣繁體用字</label>
     <div class="field" id="out-field"><span>音樂輸出裝置（練唱、試聽的聲音從這裡播出）</span>

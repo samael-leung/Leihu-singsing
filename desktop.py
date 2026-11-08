@@ -131,44 +131,74 @@ class Api:
         return True
 
 
-# 1.7：全域快捷鍵（練唱台不在最前面也能用，Stream Deck／巨集鍵盤可以直接綁）。全部是 Ctrl＋Alt＋某個鍵
-HOTKEYS = [
-    (0x20, "play", "Ctrl+Alt+空白鍵：播放／暫停"),
-    (0x41, "now", "Ctrl+Alt+A：這句對準"),
-    (0x53, "next-line", "Ctrl+Alt+S：下一句對準"),
-    (0xBC, "minus", "Ctrl+Alt+,：目前這句提早 0.1 秒"),
-    (0xBE, "plus", "Ctrl+Alt+.：目前這句延後 0.1 秒"),
-    (0x4B, "mode", "Ctrl+Alt+K：原曲／卡拉OK 切換"),
-    (0x4E, "next-song", "Ctrl+Alt+N：待唱清單的下一首"),
-    (0x21, "key-up", "Ctrl+Alt+PageUp：KEY 升一個半音"),
-    (0x22, "key-down", "Ctrl+Alt+PageDown：KEY 降一個半音"),
-]
+# 全域快捷鍵（練唱台不在最前面也能用，Stream Deck／巨集鍵盤可以直接綁）。
+# 按鍵定義在 hotkeys.py；設定改了（config.json）或設定畫面正在錄新按鍵時，會自動重新註冊，不用重開
+HOTKEY_STATUS = ROOT / "hotkeys_status.json"
+HOTKEY_PAUSE = ROOT / ".hotkeys_pause"
 
 
 def global_hotkeys(window) -> None:
     """用 Windows 的 RegisterHotKey 註冊全域快捷鍵，按下時呼叫網頁的 liveHotkey()。
-    某個組合被其他程式佔用時只略過那一個，記在 desktop.log。設定裡可以關掉（重開練唱台後生效）。"""
+    某個組合被其他程式佔用時只略過那一個，結果寫在 hotkeys_status.json 給設定畫面顯示。"""
     import ctypes
     from ctypes import wintypes
-    try:
-        cfg = json.loads((ROOT / "config.json").read_text("utf-8"))
-        if cfg.get("global_hotkeys") is False:
-            return
-    except (OSError, ValueError):
-        pass
+    import hotkeys as HK
     user32 = ctypes.windll.user32
-    MOD = 0x0001 | 0x0002 | 0x4000   # Alt＋Ctrl，按住不放不重複觸發
-    for i, (vk, act, label) in enumerate(HOTKEYS, 1):
-        if not user32.RegisterHotKey(None, i, MOD, vk):
-            print("全域快捷鍵註冊失敗（可能被其他程式佔用）：", label, flush=True)
+    reg: dict[int, str] = {}
+
+    def unregister():
+        for i in list(reg):
+            user32.UnregisterHotKey(None, i)
+        reg.clear()
+
+    def register():
+        try:
+            cfg = json.loads((ROOT / "config.json").read_text("utf-8"))
+        except (OSError, ValueError):
+            cfg = {}
+        ok, failed = [], []
+        if cfg.get("global_hotkeys") is not False:
+            for n, (act, combo) in enumerate(HK.current(cfg).items(), 1):
+                p = HK.parse(combo)
+                if not p:
+                    continue
+                if user32.RegisterHotKey(None, n, p[0] | 0x4000, p[1]):   # 0x4000：按住不放不重複觸發
+                    reg[n] = act
+                    ok.append(act)
+                else:
+                    failed.append(act)
+                    print("全域快捷鍵註冊失敗（可能被其他程式佔用）：", act, combo, flush=True)
+        try:
+            HOTKEY_STATUS.write_text(json.dumps({"ok": ok, "failed": failed, "at": time.time()}), "utf-8")
+        except OSError:
+            pass
+
     msg = wintypes.MSG()
-    while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
-        if msg.message == 0x0312 and 1 <= msg.wParam <= len(HOTKEYS):   # WM_HOTKEY
-            act = HOTKEYS[msg.wParam - 1][1]
+    sig, last = None, 0.0
+    while True:
+        while user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, 1):   # PM_REMOVE
+            if msg.message == 0x0312 and msg.wParam in reg:   # WM_HOTKEY
+                try:
+                    window.evaluate_js(f"window.liveHotkey && window.liveHotkey('{reg[msg.wParam]}')")
+                except Exception:
+                    traceback.print_exc()
+        now = time.time()
+        if now - last > 0.4:
+            last = now
             try:
-                window.evaluate_js(f"window.liveHotkey && window.liveHotkey('{act}')")
-            except Exception:
-                traceback.print_exc()
+                cfg_m = (ROOT / "config.json").stat().st_mtime_ns
+            except OSError:
+                cfg_m = 0
+            try:   # 設定畫面正在錄新按鍵：暫時放開全部快捷鍵，按下的組合才傳得到畫面（兩分鐘後自動恢復）
+                paused = now - HOTKEY_PAUSE.stat().st_mtime < 120
+            except OSError:
+                paused = False
+            if (cfg_m, paused) != sig:
+                sig = (cfg_m, paused)
+                unregister()
+                if not paused:
+                    register()
+        time.sleep(0.03)
 
 
 class _Existing:

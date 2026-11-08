@@ -231,6 +231,7 @@ function songMatches(s) {
 var LIVE = { on: store.get("liveMode", false) };
 function liveLayout() {
   document.body.classList.toggle("live", LIVE.on);
+  resetLyrNodes();
   $("#live-toggle").classList.toggle("cur", LIVE.on);
   if (LIVE.on) { $("#view-lib").hidden = false; $("#view-practice").hidden = false; $("#view-about").hidden = true; }
   if (!S.song) { $("#p-title").textContent = LIVE.on ? "從左邊選一首歌" : ""; }
@@ -264,6 +265,91 @@ $("#lv-next").onclick = () => liveAdjust("next");
 $("#lv-minus").onclick = () => liveAdjust("cur", -0.1);
 $("#lv-plus").onclick = () => liveAdjust("cur", 0.1);
 $("#lv-pop").onclick = () => $("#timing-pop").click();
+/* 自訂全域快捷鍵（設定視窗） */
+const HK_NAMES = { Comma: ",", Period: ".", Slash: "/", Semicolon: ";", Quote: "'", BracketLeft: "[", BracketRight: "]",
+  Backslash: "\\", Minus: "-", Equal: "=", Backquote: "`", Space: "空白鍵", Up: "↑", Down: "↓", Left: "←", Right: "→" };
+function hkLabel(c) { return c ? c.split("+").map(p => HK_NAMES[p] || p).join(" + ") : "（不使用）"; }
+function hkFromEvent(e) {   // 把按下的鍵轉成 hotkeys.py 用的名稱
+  const c = e.code;
+  let k = null;
+  if (/^Key[A-Z]$/.test(c)) k = c.slice(3);
+  else if (/^Digit\d$/.test(c)) k = c.slice(5);
+  else if (/^F\d{1,2}$/.test(c)) k = c;
+  else if (/^Numpad\d$/.test(c)) k = "Num" + c.slice(6);
+  else k = { Space: "Space", Enter: "Enter", NumpadEnter: "Enter", PageUp: "PageUp", PageDown: "PageDown", End: "End", Home: "Home",
+    ArrowLeft: "Left", ArrowUp: "Up", ArrowRight: "Right", ArrowDown: "Down", Insert: "Insert", Delete: "Delete",
+    NumpadMultiply: "NumMultiply", NumpadAdd: "NumAdd", NumpadSubtract: "NumSubtract", NumpadDecimal: "NumDecimal", NumpadDivide: "NumDivide",
+    Semicolon: "Semicolon", Equal: "Equal", Comma: "Comma", Minus: "Minus", Period: "Period", Slash: "Slash", Backquote: "Backquote",
+    BracketLeft: "BracketLeft", Backslash: "Backslash", BracketRight: "BracketRight", Quote: "Quote", Pause: "Pause", ScrollLock: "ScrollLock" }[c] || null;
+  if (!k) return null;
+  const mods = [e.ctrlKey && "Ctrl", e.altKey && "Alt", e.shiftKey && "Shift", e.metaKey && "Win"].filter(Boolean);
+  return [...mods, k].join("+");
+}
+let HK = null, hkCapture = null;
+async function renderHotkeys() {
+  try { HK = await api("/api/hotkeys"); } catch (e) { $("#hk-msg").textContent = e.message; return; }
+  const box = $("#hk-list");
+  box.innerHTML = "";
+  const failed = new Set(HK.status?.failed || []);
+  for (const a of HK.actions) {
+    const row = document.createElement("div");
+    row.className = "hk-row";
+    const combo = HK.current[a.id];
+    row.innerHTML = `<span class="lb"></span><button class="hk-key"></button><button class="ghost hk-def" title="改回預設">預設</button><button class="ghost hk-clr" title="不使用這個快捷鍵">清除</button><span class="hk-st"></span>`;
+    $(".lb", row).textContent = a.label;
+    $(".hk-key", row).textContent = hkLabel(combo);
+    $(".hk-st", row).textContent = failed.has(a.id) ? "被其他程式佔用" : "";
+    $(".hk-key", row).onclick = () => hkStart(a.id, $(".hk-key", row));
+    $(".hk-def", row).onclick = () => hkSave(a.id, a.default);
+    $(".hk-clr", row).onclick = () => hkSave(a.id, "");
+    box.appendChild(row);
+  }
+}
+async function hkSave(id, combo) {
+  try {
+    await api("/api/hotkeys", { json: { combos: { [id]: combo } } });
+    $("#hk-msg").textContent = "已儲存，馬上生效。";
+    setTimeout(renderHotkeys, 900);   // 等桌面程式重新註冊後再顯示有沒有被佔用
+  } catch (e) { $("#hk-msg").textContent = e.message; renderHotkeys(); }
+}
+function hkStop() {
+  if (!hkCapture) return;
+  document.removeEventListener("keydown", hkCapture.fn, true);
+  hkCapture = null;
+  api("/api/hotkeys/pause", { json: { on: false } }).catch(() => {});
+}
+function hkStart(id, btn) {
+  hkStop();
+  api("/api/hotkeys/pause", { json: { on: true } }).catch(() => {});   // 錄按鍵時先放開全域快捷鍵
+  btn.textContent = "請按下組合鍵…（Esc 取消）"; btn.classList.add("rec");
+  const fn = e => {
+    if (["Control", "Alt", "Shift", "Meta"].includes(e.key)) return;   // 等真正的按鍵
+    e.preventDefault(); e.stopPropagation();
+    hkStop(); btn.classList.remove("rec");
+    if (e.key === "Escape") return renderHotkeys();
+    const c = hkFromEvent(e);
+    if (!c) { $("#hk-msg").textContent = "這個鍵不能當快捷鍵，請換一個"; return renderHotkeys(); }
+    hkSave(id, c);
+  };
+  hkCapture = { fn };
+  document.addEventListener("keydown", fn, true);
+}
+/* 直播模式的線上歌詞搜尋：把「歌詞」面板裡的搜尋區暫時搬進對話框，關掉再搬回去（功能完全一樣） */
+let lsHome = null;
+$("#lv-search").onclick = () => {
+  if (!S.song) return toast("還沒選歌");
+  const box = $("#ls-box");
+  if (!lsHome) { lsHome = document.createComment("ls-box"); box.before(lsHome); }
+  $("#lsd-body").appendChild(box);
+  box.open = true;
+  $("#ls-dlg").hidden = false;
+  if (!$("#ls-results").children.length) searchLyrics("");
+};
+$("#lsd-close").onclick = () => {
+  $("#ls-dlg").hidden = true;
+  if (lsHome) lsHome.after($("#ls-box"));
+};
+$("#ls-dlg").addEventListener("click", e => { if (e.target.id === "ls-dlg") $("#lsd-close").click(); });
 
 /* 直播模式的操作（畫面按鈕和 Ctrl+Alt 全域快捷鍵共用） */
 function liveAction(act) {
@@ -3012,7 +3098,8 @@ function updateLyrics(t) {
     p = k === 0 ? 0 : clamp((k - 1 + clamp((t - prevT) / Math.max(0.05, nextT - prevT), 0, 1)) / n, 0, 1);
   }
   el.style.setProperty("--p", (S.charColor ? p * 100 : 0).toFixed(1) + "%");
-  const more = S.showMel ? [] : [["#lyr-next2", S.lines[i + 2] || null], ["#lyr-next3", S.lines[i + 3] || null]];
+  const five = !S.showMel || (window.LIVE && LIVE.on);   // 只看歌詞時、直播模式：一次顯示五行
+  const more = five ? [["#lyr-next2", S.lines[i + 2] || null], ["#lyr-next3", S.lines[i + 3] || null]] : [];
   for (const [id, l] of [["#lyr-prev", prev], ["#lyr-next", next], ...more]) {
     const node = $(id), tx = l ? l.text : (id === "#lyr-next" && !now && S.lines[0] ? S.lines[0].text : "");
     setLyrNode(node, tx);
@@ -3263,6 +3350,7 @@ async function openSettings(focusUsage) {
   $("#cfg-tw").checked = !!cfg.convert_to_taiwan;
   $("#cfg-autorec").checked = !!cfg.auto_recognize_lyrics;
   $("#cfg-hotkeys").checked = cfg.global_hotkeys !== false;
+  renderHotkeys();
   $("#cfg-font").value = cfg.font || "huninn";
   fillOutDevices(cfg.audio_out || "");
   $("#cfg-sep").value = cfg.separation_model;
@@ -3320,10 +3408,10 @@ $("#open-in-browser").onclick = () => api("/api/open-app", { method: "POST", jso
   .then(r => { $("#settings").hidden = true; toast(r.app ? "已開啟分享用視窗；Discord 分享時選那個視窗，第一次用麥克風時按「允許」" : "已用瀏覽器開啟練唱台；Discord 分享時選那個瀏覽器視窗", 6000); })
   .catch(e => toast(e.message));
 $("#btn-settings").onclick = openSettings;
-$("#cfg-close").onclick = () => ($("#settings").hidden = true);
+$("#cfg-close").onclick = () => { hkStop(); $("#settings").hidden = true; };
 $("#cfg-save").onclick = () => saveSettings();
 $("#cfg-clear-key").onclick = () => { $("#cfg-key").value = ""; saveSettings({ anthropic_api_key: "", clear_key: true }); };
-$("#settings").addEventListener("click", e => { if (e.target.id === "settings") $("#settings").hidden = true; });
+$("#settings").addEventListener("click", e => { if (e.target.id === "settings") { hkStop(); $("#settings").hidden = true; } });
 
 /* ------------------------------------------------------------ 啟動 */
 loadSongs().catch(e => toast(e.message));

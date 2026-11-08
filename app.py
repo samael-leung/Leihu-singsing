@@ -20,8 +20,9 @@ import claude_api as C
 import pipeline as P
 import share as SH
 import score_sheet as SS   # 1.7：旋律譜匯出
+import hotkeys as HK   # 2.0：自訂全域快捷鍵
 
-VERSION = "1.7.0"
+VERSION = "2.0.0"
 HOST, PORT = "127.0.0.1", int(os.environ.get("LIANTAI_PORT", "8765"))
 app = Flask(__name__, static_folder=str(P.ROOT / "static"), static_url_path="/static")
 app.config["MAX_CONTENT_LENGTH"] = 1024 * 1024 * 1024
@@ -1289,6 +1290,51 @@ def overlay_get():
     if request.args.get("ver") != str(o["ver"]):
         out["lines"] = o["lines"]
     return jsonify(out)
+
+
+# ---------------------------------------------------------------- 全域快捷鍵設定（2.0）
+@app.get("/api/hotkeys")
+def hotkeys_get():
+    cfg = P.load_config()
+    try:
+        status = json.loads((P.ROOT / "hotkeys_status.json").read_text("utf-8"))
+    except (OSError, ValueError):
+        status = None   # 不是用桌面版開的（瀏覽器），或還沒註冊過
+    return jsonify(actions=[{"id": a, "label": l, "default": d} for a, l, d in HK.ACTIONS],
+                   current=HK.current(cfg), enabled=cfg.get("global_hotkeys") is not False, status=status)
+
+
+@app.post("/api/hotkeys")
+@_locked
+def hotkeys_set():
+    combos = (request.get_json(force=True) or {}).get("combos") or {}
+    cfg = P.load_config()
+    cur = HK.current(cfg)
+    for a, v in combos.items():
+        if a not in HK.ACTION_IDS:
+            continue
+        v = str(v or "").strip()
+        if v and not HK.parse(v):
+            raise P.UserError(f"「{v}」不能當快捷鍵：要加 Ctrl、Alt、Shift 或 Win（F13～F24 可以單獨使用）")
+        cur[a] = v
+    used = [v for v in cur.values() if v]
+    if len(used) != len(set(used)):
+        dup = next(v for v in used if used.count(v) > 1)
+        raise P.UserError(f"「{dup}」設定給了兩個功能，請換一個")
+    cfg["hotkeys"] = cur
+    P.save_config(cfg)
+    return jsonify(current=cur)
+
+
+@app.post("/api/hotkeys/pause")
+def hotkeys_pause():
+    """設定畫面錄新按鍵時，請桌面程式暫時放開全部快捷鍵（不然按下去會直接觸發，畫面收不到）。"""
+    f = P.ROOT / ".hotkeys_pause"
+    if (request.get_json(force=True) or {}).get("on"):
+        f.write_text("1", "utf-8")
+    else:
+        f.unlink(missing_ok=True)
+    return jsonify(ok=True)
 
 
 # ---------------------------------------------------------------- 本場歌單（1.7）
