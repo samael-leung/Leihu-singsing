@@ -1,3 +1,25 @@
+# 整合版 1.6.9 — 合併上游 1.6.8，保留點歌同步
+
+2026-11-08 更新，只發佈至 `leihu-song-request-sync` 分支。
+
+- **已有 Windows AI 選擇版 1.4.4～1.6.8：[程式更新檔 Update.exe](./LeihuLiantai-windows-ai-choice-1.6.9-Update.exe)**
+- [首次安裝／修復用 Setup.exe](./LeihuLiantai-windows-ai-choice-1.6.9-Setup.exe)
+- [完整移除工具](./LeihuLiantai-windows-ai-choice-1.6.9-CleanUninstall.exe)
+
+合併原作者 `LeihuTW/Leihu-singsing` 的 1.6.8（`2a41d3006f83edda35d04aa51f7f97e46cddc941`），包含 1.6.5 之後新增的歌詞逐句調整獨立視窗、依歌聲自動校正、調整時維持歌詞順序、逐句即時評分、合唱模式及最高品質重新辨識。亦包含 Whisper CUDA 試算／CPU 回退、全新安裝 PyTorch 先補相依套件及 Windows 主控台視窗閃爍修正。Claude 結構化對齊的思考控制與舊模型回退整合至共用 ai_api.py，保留本機、OpenAI、Claude、Gemini 選擇與用量紀錄。
+
+保留雙向點歌同步、模糊歌名及繁簡配對、永久對應、點歌者與佇列資料、播放清單批次匯入／停止／重試、音訊強制對齊、FLAC、日文標音、字體、錄音與分享功能。點歌系統 `master` 沒有新提交，現有 `E:\songRequest` 已驗證的相容修復可繼續使用。
+
+**先儲存錄音、關閉程式，再執行 Update.exe 選原安裝資料夾。** 不必重裝 Python、套件、模型或 ngrok；歌曲、錄音、金鑰、設定和對應紀錄保留。Update.exe 不更新既有 Python 核心或套件；相關指令見 [安全更新說明](../../SECURITY_UPDATE_2026-10.md)。
+
+本版開始，程式內的更新提示及一鍵更新只讀取本整合分支的 [update.json](./update.json)，下載同分支 Update.exe 並核對大小和 SHA-256。可沿用 secure-runtime；不會安裝原作者的安裝檔而覆蓋自訂功能。舊版 1.6.6 請先手動執行上方更新檔一次。開發用原始碼環境只提供下載連結。
+
+來源：`4dffa062167dbd83710e3f0207d9b860afb02762`，NSIS 3.11 建置。142 項 Python 測試通過、3 項依 AI 模式跳過；真實 CTC 模型推論未執行。11 項同步 JavaScript 測試、3 項設定／直播歌詞／麥克風時脈 smoke、點歌系統 13 項測試通過。實際 Flask／Node／Chromium 驗證模糊配對、保留點歌者、雙向選歌、跳歌、重新載入後的對應、日文歌詞修復、逐句調整視窗與儲存、歌詞順序、合成音高輸入的評分及更新分支連結，沒有瀏覽器程式錯誤。
+
+封裝完整性、31 個來源／字體／說明檔逐一比對及更新資訊檢查通過；不包含執行環境、模型或使用者資料。檢查碼見 [SHA256SUMS](./SHA256SUMS)。Windows 安裝 GUI、實體麥克風、實際 GPU／模型推論未在 Linux 雲端執行；安裝檔未簽章。
+
+---
+
 # 整合版 1.6.6 — 上游 1.6.5 與 F:\LeihuLiantai 操作指引
 
 只發佈到 `leihu-song-request-sync` 分支。

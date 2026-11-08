@@ -4,6 +4,9 @@ fa84467790d94f22b8c31e321370a2ceecfac0bee244bca89ec1b9165286301d  LeihuLiantai-l
 2eefaaa0c633c8b9d3ebb6a6d8be901cf55969cc5738eb311f3f6fc95d69b1e9  LeihuLiantai-localModel-1.4.3-Setup.exe
 d8476afaa6c024428ea69181a459b449138f4f26f3df66c0e4bb9151c35527fe  LeihuLiantai-localModel-1.4.4-CleanUninstall.exe
 b67b050c203f52e760775df4488717eb93cdd8cdd7f35607b78f5a7faef32bbb  LeihuLiantai-localModel-1.4.4-Setup.exe
+ee5816a68fe526b8a0fb0c9679e124cbca6b2d0454ec5d97a01c7c67d351604f  LeihuLiantai-windows-ai-choice-1.4.10-CleanUninstall.exe
+5a39b1d8e6df23ba355314660fa20a57edca7dbe84ef04af5b2c4764aade2aa0  LeihuLiantai-windows-ai-choice-1.4.10-Setup.exe
+767819ee10cacb822003befd6ed52f60e8d2dbf97715a39763290ad987c294fd  LeihuLiantai-windows-ai-choice-1.4.10-Update.exe
 abb462bc2cba5cb4112b20444841257200d2c49f932e9778d1f6d814f1805e9a  LeihuLiantai-windows-ai-choice-1.4.4-CleanUninstall.exe
 e0c5104f202b4532131ce4920db3c83e748cb1999c757adbd0525d1fbe56faf8  LeihuLiantai-windows-ai-choice-1.4.4-Setup.exe
 b240274edef221185e4249e7357b263e5e8b47a0997ffbcfadd0074baa1604d6  LeihuLiantai-windows-ai-choice-1.4.5-CleanUninstall.exe
@@ -15,9 +18,6 @@ a2718d08ae0b92c1b1539fc99086cb87d9bb61a361a192aff77aed30b39d3df3  LeihuLiantai-w
 a7476a6c4748060c78a5265ada4bee16c28a1adf56c4779ed9846adbe3c409a0  LeihuLiantai-windows-ai-choice-1.4.7-CleanUninstall.exe
 fbe8de90234ba16811dd678c9289386d0a2734e2de9ba5bb7988639a0cfcd681  LeihuLiantai-windows-ai-choice-1.4.7-Setup.exe
 a9fbe7e8db99194682f6a235908007559be3e08cb8d826d857c330140a26c2ae  LeihuLiantai-windows-ai-choice-1.4.7-Update.exe
-ee5816a68fe526b8a0fb0c9679e124cbca6b2d0454ec5d97a01c7c67d351604f  LeihuLiantai-windows-ai-choice-1.4.10-CleanUninstall.exe
-5a39b1d8e6df23ba355314660fa20a57edca7dbe84ef04af5b2c4764aade2aa0  LeihuLiantai-windows-ai-choice-1.4.10-Setup.exe
-767819ee10cacb822003befd6ed52f60e8d2dbf97715a39763290ad987c294fd  LeihuLiantai-windows-ai-choice-1.4.10-Update.exe
 a36684a2f664f994f1b3fa51ca7b72271c4b6e6e5026c8d686e8d8889ec97d64  LeihuLiantai-windows-ai-choice-1.5.2-CleanUninstall.exe
 77a608a86890f52f10eab983643cd7025a2d46477e85e4204460e747100bd940  LeihuLiantai-windows-ai-choice-1.5.2-Setup.exe
 1e822c7561fd8a9eec61d16ec9d21e5192c08f032ebdd1b6a1e82cc6097f590c  LeihuLiantai-windows-ai-choice-1.5.2-Update.exe
@@ -30,3 +30,6 @@ aaac1c03bc8ad7c5a1cb1eb526b51742aea93483e12ee855491d8579aba501b4  LeihuLiantai-w
 cf9459742dcea849e01750576828ce0e84c1059f1e7c215c0ec2aac0998bdfc7  LeihuLiantai-windows-ai-choice-1.6.6-CleanUninstall.exe
 170f46ef99f85429734e4a65a442d76e8b2918a1c41115548ca1bdb588efe26f  LeihuLiantai-windows-ai-choice-1.6.6-Setup.exe
 4a331ad696b708ca327a29c72f3ce0b6b61ea7b72b356efea679c2ed84af5434  LeihuLiantai-windows-ai-choice-1.6.6-Update.exe
+e51b781032e0ad4103f71fcb573a1e4a7aaae157a7e69309c3a51e97d860846d  LeihuLiantai-windows-ai-choice-1.6.9-CleanUninstall.exe
+f4dda7d0277c5668c5331e32f74c6eef352cdcda47156322ba13de504d052605  LeihuLiantai-windows-ai-choice-1.6.9-Setup.exe
+0391aca9db38035264cc24999712909196cd0813ee8027e1c1b6b8f435500246  LeihuLiantai-windows-ai-choice-1.6.9-Update.exe

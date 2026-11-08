@@ -1,0 +1,11 @@
+{
+  "tag_name": "v1.6.9",
+  "assets": [
+    {
+      "name": "LeihuLiantai-windows-ai-choice-1.6.9-Update.exe",
+      "browser_download_url": "https://raw.githubusercontent.com/samael-leung/Leihu-singsing/refs/heads/leihu-song-request-sync/installer/releases/LeihuLiantai-windows-ai-choice-1.6.9-Update.exe",
+      "size": 3190822,
+      "digest": "sha256:0391aca9db38035264cc24999712909196cd0813ee8027e1c1b6b8f435500246"
+    }
+  ]
+}
