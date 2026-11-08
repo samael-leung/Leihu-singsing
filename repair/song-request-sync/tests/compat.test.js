@@ -9,13 +9,18 @@ const { spawnSync } = require('node:child_process');
 const express = require(path.join(process.env.SONG_REQUEST_PROJECT || process.cwd(), 'node_modules', 'express'));
 const install = require('../leihu-selection-compat');
 const source = fs.readFileSync(path.join(__dirname, 'queue-fixture.js'), 'utf8');
-function fixtureQueue() {
+function fixtureQueue(t) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sheng-queue-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const module = { exports: {} };
-  vm.runInNewContext(source, { module, exports: module.exports, console, Date, Set });
+  const file = path.join(dir, 'state.json');
+  vm.runInNewContext(source, { module, exports: module.exports, console, Date, Set, require,
+    __dirname, process: { env: { QUEUE_STATE_FILE: file } } });
+  Object.defineProperty(module.exports, 'fixtureFile', { value: file });
   return module.exports;
 }
 async function server(t) {
-  const queue = fixtureQueue(), links = [];
+  const queue = fixtureQueue(t), links = [];
   const app = express(); app.use(express.json());
   app.get('/api/leihu/status', (req, res) => res.json({ native: true }));
   install(app, { queue, leihu: { setLink: (...args) => links.push(args) } });
@@ -103,7 +108,7 @@ function project() {
   fs.writeFileSync(path.join(dir, '.env'), 'DO_NOT_TOUCH=test-secret');return dir;
 }
 function run(dir, ...args) { return spawnSync(process.execPath, [path.join(__dirname, '..', 'install.js'), dir, ...args], { encoding: 'utf8' }); }
-test('installer preserves bytes/settings, refuses repeated patches and safely restores the backup', t => {
+test('installer preserves bytes/settings, repeated installation is harmless, and undo restores the backup', t => {
   const dir = project();t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const before = fs.readFileSync(path.join(dir, 'server', 'index.js'));
   const native = fs.readFileSync(path.join(dir, 'server', 'leihu.js'));
@@ -111,7 +116,7 @@ test('installer preserves bytes/settings, refuses repeated patches and safely re
   const patched = fs.readFileSync(path.join(dir, 'server', 'index.js'), 'utf8');
   assert.equal(patched.split("require('./leihu-selection-compat')(app);").length, 2);assert.ok(patched.startsWith('\ufeff'));assert.ok(patched.includes('\r\n'));
   assert.deepEqual(fs.readFileSync(path.join(dir, 'server', 'leihu.js')), native);assert.equal(fs.readFileSync(path.join(dir, '.env'), 'utf8'), 'DO_NOT_TOUCH=test-secret');
-  assert.notEqual(run(dir).status, 0);
+  assert.equal(run(dir).status, 0);
   assert.equal(run(dir, '--undo').status, 0);assert.deepEqual(fs.readFileSync(path.join(dir, 'server', 'index.js')), before);
 });
 test('installer refuses unknown interfaces and undo refuses to erase later user edits', t => {
@@ -123,4 +128,49 @@ test('installer refuses unknown interfaces and undo refuses to erase later user 
   const before = fs.readFileSync(path.join(other, 'server', 'index.js'));
   fs.writeFileSync(path.join(other, 'server', 'queue.js'), 'module.exports={};');
   assert.notEqual(run(other).status, 0);assert.deepEqual(fs.readFileSync(path.join(other, 'server', 'index.js')), before);
+});
+test('actual sheng queue saves corrected candidates and links without settling any redemption', async t => {
+  const s = await server(t), settled = [];
+  s.queue.setRedemptionHook((r, action) => settled.push([r.id, action]));
+  s.queue.addSong({ title: 'Current', requester: 'first', redemption: { id: 'r1' } });
+  s.queue.addSong({ title: 'Later', requester: 'other' });
+  s.queue.addPending({ requester: 'viewer', redemption: { id: 'r2' }, candidates: [
+    { title: 'Same', artist: 'A', key: '2' }, { title: 'Same', artist: 'B', key: '-4' },
+  ] });
+  assert.equal((await s.post({ id: 'artistb', title: 'Same', artist: 'B' })).status, 200);
+  const saved = JSON.parse(fs.readFileSync(s.queue.fixtureFile, 'utf8'));
+  assert.equal(saved.nowPlaying.artist, 'B'); assert.equal(saved.nowPlaying.key, '-4');
+  assert.equal(saved.nowPlaying.leihuId, 'artistb'); assert.equal(saved.nowPlaying.redemption.id, 'r2');
+  assert.deepEqual(saved.queue.map(s => s.title), ['Current', 'Later']);
+  assert.deepEqual(settled, []);
+  s.queue.skipSong(); assert.deepEqual(settled, [['r2', 'done']]);
+});
+test('reapplying after an upstream update restores the endpoint and undo keeps the previous repair files', t => {
+  const dir = project(); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const previous = fs.readFileSync(path.join(__dirname, 'previous-bridge.js'));
+  const bridge = path.join(dir, 'server', 'leihu-selection-compat.js');
+  const marker = path.join(dir, '.leihu-sync-repair.json');
+  const original = fs.readFileSync(path.join(dir, 'server', 'index.js'));
+  fs.writeFileSync(bridge, previous); fs.writeFileSync(marker, '{"old":"repair-record"}');
+  const nativeQueue = fs.readFileSync(path.join(dir, 'server', 'queue.js'));
+  assert.equal(run(dir).status, 0);
+  assert.notDeepEqual(fs.readFileSync(bridge), previous);
+  assert.deepEqual(fs.readFileSync(path.join(dir, 'server', 'queue.js')), nativeQueue);
+  assert.equal(run(dir, '--undo').status, 0);
+  assert.deepEqual(fs.readFileSync(bridge), previous);
+  assert.equal(fs.readFileSync(marker, 'utf8'), '{"old":"repair-record"}');
+  assert.deepEqual(fs.readFileSync(path.join(dir, 'server', 'index.js')), original);
+});
+test('an old mounted repair upgrades once and refuses to overwrite an unknown custom bridge', t => {
+  const dir = project(); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const target = path.join(dir, 'server', 'index.js');
+  const bridge = path.join(dir, 'server', 'leihu-selection-compat.js');
+  fs.appendFileSync(target, "require('./leihu-selection-compat')(app);\r\n");
+  const original = fs.readFileSync(target);
+  fs.copyFileSync(path.join(__dirname, 'previous-bridge.js'), bridge);
+  assert.equal(run(dir).status, 0); assert.deepEqual(fs.readFileSync(target), original);
+  assert.equal(run(dir).status, 0);
+  fs.writeFileSync(bridge, 'module.exports = () => {}; // custom changes');
+  assert.notEqual(run(dir).status, 0);
+  assert.equal(fs.readFileSync(bridge, 'utf8'), 'module.exports = () => {}; // custom changes');
 });

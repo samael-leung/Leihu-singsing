@@ -139,3 +139,5 @@ Windows 安裝檔以 `sh installer/build.sh` 建置，需要 NSIS。Mac 請使�
 點歌系統相容修復已由使用者在 `E:\songRequest` 確認可正常同步。已正式整合至 [twitch-song-request-system 的 leihu-song-request-sync 分支](https://github.com/samael-leung/twitch-song-request-system/tree/leihu-song-request-sync)；既有另含自訂原生功能的 ZIP 安裝可保留已成功套用的修復包。
 
 1.6.9 的程式內更新提示與一鍵更新只讀取本儲存庫 `leihu-song-request-sync` 分支的 `installer/releases/update.json`，使用程式更新檔並核對大小及 SHA-256，不會安裝原作者版本而失去同步或 AI 選擇功能。已建立 `secure-runtime` 的安裝亦可使用。開發原始碼環境只顯示下載連結。建置時會產生對應的更新資訊，發佈時須將它與同版 Update.exe 一起提交。
+
+目前點歌系統上游已確認為 [sheng7337/twitch-song-request-system](https://github.com/sheng7337/twitch-song-request-system)（2026.11-1，00d83d0）。已將此版本合併至你的點歌系統 leihu-song-request-sync 分支，並更新 [404 相容修復包](repair/song-request-sync/README.md)，可直接套用在 E:\songRequest 的原作者 ZIP 安裝。只修點歌端，不需重裝練唱台 1.6.9；原生雷虎匯入、下載、歌詞與其他功能保留。

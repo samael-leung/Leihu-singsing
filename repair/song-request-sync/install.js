@@ -27,15 +27,27 @@ function main() {
     const backup = path.resolve(root, record.backup);
     if (!backup.startsWith(path.join(root, 'backups') + path.sep)) throw new Error('Invalid backup path');
     fs.copyFileSync(path.join(backup, 'index.js'), target);
-    fs.unlinkSync(bridge); fs.unlinkSync(marker);
+    if (record.originalBridge) fs.copyFileSync(path.join(backup, 'leihu-selection-compat.js'), bridge);
+    else fs.unlinkSync(bridge);
+    if (record.originalMarker) fs.copyFileSync(path.join(backup, 'repair-record.json'), marker);
+    else fs.unlinkSync(marker);
     console.log('Original index.js restored. Existing leihu.js, queue.js and settings were not changed.');
     return;
   }
   const original = fs.readFileSync(target, 'utf8');
-  if (original.includes('/api/integrations/leihu/selection') || original.includes("require('./leihu-selection-compat')")) {
-    throw new Error('A selection API is already present. No files changed.');
+  const mounts = original.match(/require\(\s*['"]\.\/leihu-selection-compat['"]\s*\)\s*\(\s*app\s*\)\s*;/g) || [];
+  if (mounts.length > 1 || (!mounts.length && original.includes('/api/integrations/leihu/selection'))) {
+    throw new Error('Another selection API is already present. No files changed.');
   }
-  if (fs.existsSync(bridge) || fs.existsSync(marker)) throw new Error('An existing repair file was found. No files changed.');
+  const suppliedBridge = path.join(__dirname, 'leihu-selection-compat.js');
+  const previousBridge = fs.existsSync(bridge) ? fs.readFileSync(bridge) : null;
+  const previousMarker = fs.existsSync(marker) ? fs.readFileSync(marker) : null;
+  const known = [sha(suppliedBridge), '0e0e66959677276e59769cba61e3f3e03b073c3f868e666aa3d3c951115ac4c3'];
+  if (previousBridge && !known.includes(sha(bridge))) throw new Error('The existing bridge has custom edits. No files changed.');
+  if (mounts.length && previousBridge && sha(bridge) === sha(suppliedBridge)) {
+    console.log('The current repair is already installed. Restart the song-request server and verify the selection URL.');
+    return;
+  }
   const queueSource = fs.readFileSync(path.join(server, 'queue.js'), 'utf8');
   if (!/function\s+moveSong\s*\(\s*fromZone\s*,\s*fromIndex\s*,\s*toZone\s*,/.test(queueSource)) {
     throw new Error('Unrecognized moveSong interface. No files changed; provide server/queue.js for review.');
@@ -46,23 +58,28 @@ function main() {
   if (!/setLink/.test(fs.readFileSync(path.join(server, 'leihu.js'), 'utf8'))) throw new Error('Unrecognized existing Leihu module. No files changed.');
   const anchor = /^([ \t]*)app\.get\(\s*['"]\/api\/leihu\/status['"]/m.exec(original);
   if (!anchor) throw new Error('Existing /api/leihu/status route not found. No files changed.');
-  check(target); check(path.join(__dirname, 'leihu-selection-compat.js'));
+  check(target); check(suppliedBridge);
   const newline = original.includes('\r\n') ? '\r\n' : '\n';
-  const patched = original.slice(0, anchor.index) + "require('./leihu-selection-compat')(app);" + newline + original.slice(anchor.index);
+  const patched = mounts.length ? original : original.slice(0, anchor.index) + "require('./leihu-selection-compat')(app);" + newline + original.slice(anchor.index);
   const backup = path.join(root, 'backups', `leihu-sync-${new Date().toISOString().replace(/[:.]/g, '-')}-${crypto.randomBytes(3).toString('hex')}`);
   fs.mkdirSync(backup, { recursive: true });
   fs.copyFileSync(target, path.join(backup, 'index.js'));
+  if (previousBridge) fs.writeFileSync(path.join(backup, 'leihu-selection-compat.js'), previousBridge);
+  if (previousMarker) fs.writeFileSync(path.join(backup, 'repair-record.json'), previousMarker);
   const staging = path.join(server, `.leihu-sync-${crypto.randomBytes(4).toString('hex')}.js`);
   let replaced = false;
   try {
     fs.writeFileSync(staging, patched, 'utf8'); check(staging);
-    fs.copyFileSync(path.join(__dirname, 'leihu-selection-compat.js'), bridge);
+    fs.copyFileSync(suppliedBridge, bridge);
     fs.renameSync(staging, target); replaced = true;
-    fs.writeFileSync(marker, JSON.stringify({ backup: path.relative(root, backup), patchedHash: sha(target), bridgeHash: sha(bridge) }, null, 2));
+    fs.writeFileSync(marker, JSON.stringify({ backup: path.relative(root, backup), patchedHash: sha(target), bridgeHash: sha(bridge),
+      originalBridge: !!previousBridge, originalMarker: !!previousMarker }, null, 2));
   } catch (error) {
     if (replaced) fs.copyFileSync(path.join(backup, 'index.js'), target);
-    if (fs.existsSync(bridge)) fs.unlinkSync(bridge);
-    if (fs.existsSync(marker)) fs.unlinkSync(marker);
+    if (previousBridge) fs.writeFileSync(bridge, previousBridge);
+    else if (fs.existsSync(bridge)) fs.unlinkSync(bridge);
+    if (previousMarker) fs.writeFileSync(marker, previousMarker);
+    else if (fs.existsSync(marker)) fs.unlinkSync(marker);
     throw error;
   } finally { if (fs.existsSync(staging)) fs.unlinkSync(staging); }
   console.log(`Repair installed. Backup: ${backup}`);
