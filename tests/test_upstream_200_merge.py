@@ -27,7 +27,8 @@ class LiveFeatureTests(unittest.TestCase):
         self.root = Path(folder.name)
         self.song = self.root / 'library' / 'songaa'
         self.song.mkdir(parents=True)
-        for change in (patch.object(P, 'LIB', self.song.parent),
+        for change in (patch.object(P, 'ROOT', self.root),
+                       patch.object(P, 'LIB', self.song.parent),
                        patch.object(P, 'CONFIG_PATH', self.root / 'config.json'),
                        patch.object(P, 'MODELS', self.root / 'models'),
                        patch.object(web, 'SETLIST_PATH', self.root / 'setlist.json')):

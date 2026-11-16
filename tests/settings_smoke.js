@@ -12,8 +12,9 @@ const cfg = {ai_mode:'local',api_provider:'openai',ai_setup_complete:false,ollam
   claude_model:'claude-sonnet-4-6',gemini_model:'gemini-2.5-flash',has_keys:{openai:true,claude:false,gemini:false},
   whisper_model:'large-v3-turbo',lyrics_language:'zh',convert_to_taiwan:true,
   separation_model:'UVR-MDX-NET-Inst_HQ_3.onnx',karaoke_model:'UVR_MDXNET_KARA_2.onnx',pitch_model:'auto'};
-let saved, appliedFont, prepared=0, sinkCalls=0;
+let saved, appliedFont, prepared=0, sinkCalls=0, monitorCalls=0;
 const context = vm.createContext({
+  S:{leadPrivate:true},setLeadPrivate(enabled,remember){assert.equal(enabled,true);assert.equal(remember,false);monitorCalls++;},
   AudioContext:class {setSinkId(){}},document:{createElement:()=>({})},
   outDevices:async()=>[{label:'USB Output'}],applySink(){sinkCalls++;},renderHotkeys:async()=>{},hkStop(){},
   $: selector => {const element=elements[selector.slice(1)];assert.ok(element,selector);return element;},
@@ -43,9 +44,14 @@ vm.runInContext(js.slice(start,end),context);
     elements['cfg-'+provider+'-key'].value='private-'+provider;
     elements['cfg-font'].value='sans';
     elements['cfg-out'].value='USB Output';
+    elements['cfg-mon'].value='Headphones';
+    elements['cfg-vq'].value='high';
+    elements['cfg-pause-live'].checked=true;
     await context.saveSettings();
     assert.equal(saved.font,'sans');assert.equal(appliedFont,'sans');
     assert.equal(saved.audio_out,'USB Output');assert.ok(sinkCalls>0);
+    assert.equal(saved.monitor_out,'Headphones');assert.ok(monitorCalls>0);
+    assert.equal(saved.vocal_quality,'high');assert.equal(saved.pause_while_streaming,true);
     assert.equal(saved.api_provider,provider);assert.equal(saved.ai_mode,'api');
     assert.equal(saved[provider==='claude'?'anthropic_api_key':provider+'_api_key'],'private-'+provider);
     assert.equal(elements['cfg-'+provider+'-key'].value,'');

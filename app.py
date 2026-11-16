@@ -27,7 +27,7 @@ import song_request
 import score_sheet as SS   # 1.7：旋律譜匯出
 import hotkeys as HK   # 2.0：自訂全域快捷鍵
 
-VERSION = "2.0.1"
+VERSION = "2.1.1"
 HOST, PORT = "127.0.0.1", int(os.environ.get("LIANTAI_PORT", "8765"))
 app = Flask(__name__, static_folder=str(P.ROOT / "static"), static_url_path="/static")
 app.config["MAX_CONTENT_LENGTH"] = 1024 * 1024 * 1024
@@ -45,7 +45,7 @@ def _locked(fn):
     return wrap
 
 
-jobs = P.Jobs()
+jobs = P.Jobs(live_safe=True)   # 分離、分析、辨識：直播中暫停，不搶顯示卡
 vjobs = P.Jobs()   # 移調／變速另外排隊：不會被分軌、評分卡住，也不會卡住它們
 
 
@@ -67,8 +67,14 @@ def status():
     cfg = P.load_config()
     q = cfg.get("karaoke_quality", "auto")
     hq = P.hq_status() if (q == "high" or (q == "auto" and mods.get("cuda"))) else None
+    vq = cfg.get("vocal_quality", "auto")
+    hqv = P.hqv_status() if (vq == "high" or (vq == "auto" and mods.get("cuda"))) else None
+    if request.args.get("live") == "1":
+        P.live_touch()
+    live = P.live_status(cfg)
+    live["holding"] = jobs.holding
     return jsonify(version=VERSION, root=str(P.ROOT), modules=mods, cuda_note=P.CUDA_NOTE, hq=hq,
-                   hq_model=P.HQ_KARAOKE,
+                   hq_model=P.HQ_KARAOKE, hqv=hqv, live=live,
                    ai_ready=C.ready(), ai_provider=C.provider(),
                    session_cost=C.summary()["session"]["cost_usd"],
                    remote=dict(REMOTE), yt_pause=dict(P.YT_PAUSE), update=dict(UPDATE), **_jobs_for_ui())
@@ -108,6 +114,22 @@ def youtube_resume():
 # 練唱畫面輪詢 /api/status 時看到 seq 變了就照做。
 REMOTE = {"seq": 0, "id": None, "key": 0}
 _remote_lock = threading.Lock()
+
+
+@app.before_request
+def _local_only():
+    """練唱台只給這台電腦自己的畫面和程式用。
+    瀏覽器裡其他網站的網頁可以對 127.0.0.1 送出 POST（不需要預檢的簡單請求），
+    不擋的話任何網站都能趁練唱台開著時改設定、加下載、清歌單；所以：
+    1. Host 不是本機位址的一律拒絕（防 DNS rebinding）；
+    2. 會改資料的請求（非 GET）如果帶了 Origin，必須是練唱台自己。"""
+    host = (request.host or "").rsplit(":", 1)[0].strip("[]").lower()
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        abort(403)
+    if request.method not in ("GET", "HEAD", "OPTIONS"):
+        origin = request.headers.get("Origin")
+        if origin and origin.rstrip("/").lower() not in (f"http://127.0.0.1:{PORT}", f"http://localhost:{PORT}"):
+            abort(403)
 
 
 @app.post("/api/remote/open")
@@ -567,6 +589,8 @@ def rename(sid):
     if "key" in body:   # 預設 KEY：打開這首歌時自動切到這個 KEY，並先做好移調版本
         k = P.parse_key(body.get("key"))
         changes.update(key=k or 0, key_set_at=time.time())
+    if "lyrics_flag" in body:   # 歌詞待修標記（直播中發現不準先標起來，下播再處理）
+        changes["lyrics_flag"] = bool(body.get("lyrics_flag"))
     if "lyrics_language" in body:   # 這首歌的辨識語言；null＝依設定
         v = body.get("lyrics_language")
         changes["lyrics_language"] = v if v in ("", "zh", "ja", "en", "ko", "yue") else None
@@ -1402,6 +1426,33 @@ def overlay_get():
     return jsonify(out)
 
 
+@app.post("/api/live/override")
+def live_override():
+    """「直播中也照常處理」：接下來一小時不管直播偵測。"""
+    P.live_override(3600)
+    return jsonify(ok=True)
+
+
+@app.post("/api/upgrade-separation")
+def upgrade_separation():
+    """2.1.0：把還沒用新的人聲模型（BS-Roformer）處理過的歌，排進佇列重新分離＋分析旋律（歌詞、錄音不動）。
+    排在佇列最後、直播中會暫停，所以可以放著慢慢跑。"""
+    if not P.hqv_ready():
+        P.start_hqv_download()
+        raise P.UserError("高品質人聲模型（約 640 MB）還在下載，下載完成後再按一次")
+    if P.vocal_model(P.load_config()) != P.HQ_VOCAL:
+        raise P.UserError("目前「人聲分離品質」設定不會用高品質模型（標準，或沒有顯示卡），升級不會有差別")
+    n = 0
+    for s in P.list_songs():
+        if not (s.get("steps") or {}).get("separate") or s.get("vocal_model") == "bs_roformer" or s.get("separation") != "uvr":
+            continue
+        if jobs.find("process", s["id"], "upgrade") or jobs.find("process", s["id"], "max"):
+            continue
+        jobs.submit("process", s["id"], P.process_song(s["id"], ["separate", "pitch"]), label="upgrade")
+        n += 1
+    return jsonify(queued=n)
+
+
 # ---------------------------------------------------------------- 全域快捷鍵設定（2.0）
 @app.get("/api/hotkeys")
 def hotkeys_get():
@@ -1558,6 +1609,8 @@ def timing_state_put():
     if not owner:
         raise P.UserError("缺少 owner")
     with _TCOND:
+        for o in [o for o, t in TIMING["seen"].items() if time.time() - t > 3600 and o != owner]:   # 很久沒開的調整視窗
+            TIMING["seen"].pop(o, None); TIMING["state"].pop(o, None)
         st = TIMING["state"].setdefault(owner, {})
         st.update(body)
         TIMING["sseq"] += 1
@@ -1666,8 +1719,12 @@ def watch_parent() -> None:
 
 
 def remove_duet_leftovers() -> None:
-    """1.7.0 測試版的「男女對唱」已經拿掉：清掉它留下的模型（約 530 MB）、每首歌的男聲／女聲軌與聲部標記。"""
+    """1.7.0 測試版的「男女對唱」已經拿掉：清掉它留下的模型（約 530 MB）、每首歌的男聲／女聲軌與聲部標記。
+    只需要做一次，做完留一個記號，之後啟動不用再掃整個歌曲庫。"""
     import shutil
+    flag = P.ROOT / ".duet_cleaned"
+    if flag.exists():
+        return
     for pat in ("model_chorus_bs_roformer_ep_267_sdr_24.1275.ckpt*", "config_chorus_male_female_bs_roformer.yaml*"):
         for f in P.MODELS.glob(pat):
             try:
@@ -1695,6 +1752,40 @@ def remove_duet_leftovers() -> None:
                         P.write_meta(d, m)
             except Exception as e:
                 P.log_error("remove_duet_leftovers", e)
+    try:
+        flag.write_text("1", "utf-8")
+    except OSError:
+        pass
+
+
+def live_light_upgrade() -> None:
+    """直播中匯入、先用輕量模型處理的歌：直播結束後自動用高品質模型重新分離＋分析旋律（歌詞、錄音不動）。
+    upgrade 是背景工作，萬一又開播會自動暫停。"""
+    time.sleep(90)
+    tried: set[str] = set()   # 這次開程式已經排過的（失敗或被按停止就不再自動排）
+    while True:
+        try:
+            cfg = P.load_config()
+            if not P.live_status(cfg)["hold"] and P.hq_models_ready(cfg):
+                for s in P.list_songs():
+                    sid = s["id"]
+                    if not s.get("live_light") or sid in tried:
+                        continue
+                    if any(jobs.find("process", sid, lb) for lb in ("upgrade", "max", "fine", "all", "youtube")):
+                        continue
+                    proc = P.process_song(sid, ["separate", "pitch"])
+
+                    def run(report, sid=sid, proc=proc):
+                        proc(report)
+                        try:
+                            prerender_key(sid)   # 重新分軌會清掉舊的移調版本
+                        except Exception as e:
+                            P.log_error("live_light_upgrade prerender", e)
+                    jobs.submit("process", sid, run, label="upgrade")
+                    tried.add(sid)
+        except Exception as e:
+            P.log_error("live_light_upgrade", e)
+        time.sleep(120)
 
 
 def loudness_backfill() -> None:
@@ -1834,6 +1925,7 @@ def main():
     resume_downloads()
     threading.Thread(target=prefetcher, daemon=True, name="prefetch").start()
     threading.Thread(target=loudness_backfill, daemon=True, name="loudness").start()
+    threading.Thread(target=live_light_upgrade, daemon=True, name="live-light").start()
     threading.Thread(target=remove_duet_leftovers, daemon=True, name="cleanup").start()
     threading.Thread(target=check_update, daemon=True, name="update").start()
     url = f"http://{HOST}:{PORT}"

@@ -18,6 +18,7 @@ import os
 import queue
 import re
 import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -42,6 +43,9 @@ STEMS = ("lead", "back", "inst")
 
 DEFAULT_CONFIG = {
     "separation_model": "UVR-MDX-NET-Inst_HQ_3.onnx",
+    "vocal_quality": "auto",   # 人聲／伴奏分離：auto：有顯示卡用高品質（BS-Roformer，乾淨很多但慢一倍）；standard；high
+    "pause_while_streaming": True,   # 偵測到直播軟體（OBS、VTube Studio…）或直播模式開著時，暫停背景的分離、辨識
+    "streaming_apps": ["obs64.exe", "obs32.exe", "VTube Studio.exe", "Streamlabs OBS.exe", "XSplit.Core.exe", "vMix64.exe"],
     "karaoke_model": "UVR_MDXNET_KARA_2.onnx",
     "karaoke_quality": "auto",   # auto：有顯示卡用高品質（Roformer）；standard；high
     "karaoke_overlap": 2,
@@ -52,6 +56,7 @@ DEFAULT_CONFIG = {
     "auto_recognize_lyrics": False,   # 關閉時匯入先套用線上歌詞
     "global_hotkeys": True,   # Windows 全域快捷鍵；設定改動會自動重新註冊
     "audio_out": "",   # 音樂輸出裝置名稱；空字串＝系統預設
+    "monitor_out": "",   # 「原唱只給我聽」時，自己聽的裝置（耳機）名稱
     "font": "huninn",   # 介面與歌詞字體：huninn（內建 jf open 粉圓）／kai（楷書）／sans（黑體）
     "pitch_model": "auto",
     "ai_mode": "local",
@@ -294,6 +299,13 @@ def _song_entry(d: Path) -> dict | None:
     except Exception as e:   # 一首歌的資料讀不出來，不要讓整個歌曲庫打不開
         log_error(f"list_songs {d.name}", e)
         return None
+    rc = m.get("lyrics_recheck")
+    if isinstance(rc, dict):
+        try:
+            if (d / "lyrics.lrc").stat().st_mtime_ns != rc.get("mtime"):
+                m["lyrics_recheck"] = None   # 歌詞改過了
+        except OSError:
+            m["lyrics_recheck"] = None
     takes = list_takes(d)
     m["takes"] = len(takes)
     scored = [t["acc"] for t in takes if t.get("acc") is not None]
@@ -1255,11 +1267,16 @@ def _pick(paths: list[Path], kind: str) -> Path:
 # 合音多、或有和聲吟唱的歌，標準模型常把合音留在主唱軌，旋律會在兩個聲部之間亂跳；這個模型分得乾淨很多。
 # 用 PyTorch 運算：有顯示卡約幾十秒，只有 CPU 會非常慢（一首歌可能要十幾分鐘），所以「自動」只在顯示卡可用時才用。
 HQ_KARAOKE = "mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt"
+# 2.1.0：高品質的人聲／伴奏分離模型（BS-Roformer，viperx）。MVSEP 排行榜人聲 10.87／伴奏 17.17 dB，
+# 比原本的 MDX-NET Inst HQ 3（9.38／15.68）乾淨很多；伴奏殘留的人聲和主唱軌殘留的鼓都明顯減少
+HQ_VOCAL = "model_bs_roformer_ep_317_sdr_12.9755.ckpt"
+_HQ_VOCAL_YAML = "model_bs_roformer_ep_317_sdr_12.9755.yaml"
 
 
 # 模型下載來源：Hugging Face 的鏡像在台灣比 GitHub 快很多，放第一個；失敗或太慢再換 GitHub。
 # 每個檔案都核對大小與 SHA-256（與 GitHub 原檔一致），鏡像就算被換掉也不會用到錯的檔案。
 _HF_UVR = "https://huggingface.co/Politrees/UVR_resources/resolve/main/models/"
+_RAW_CFG = "https://raw.githubusercontent.com/TRvlvr/application_data/main/mdx_model_data/mdx_c_configs/"
 _GH_UVR = "https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models/"
 _GH_AS = "https://github.com/nomadkaraoke/python-audio-separator/releases/download/model-configs/"
 _HQ_YAML = "mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956_config.yaml"
@@ -1271,6 +1288,10 @@ MODEL_FILES = {   # 檔名 → (大小, SHA-256, 下載網址…)
     HQ_KARAOKE: (913096801, "1de20d459332fe8869aeb01327a31df0032262706e1365114e852dc271779813", [
         _HF_UVR + "Roformer/MelBand/" + HQ_KARAOKE, _GH_UVR + HQ_KARAOKE, _GH_AS + HQ_KARAOKE]),
     _HQ_YAML: (None, None, [_GH_AS + _HQ_YAML]),
+    HQ_VOCAL: (639331213, "5b84f37e8d444c8cb30c79d77f613a41c05868ff9c9ac6c7049c00aefae115aa", [
+        _GH_UVR + HQ_VOCAL, _HF_UVR + "Roformer/BSRoformer/" + HQ_VOCAL]),
+    _HQ_VOCAL_YAML: (2273, "2bfdd16c656bd9519aba757cc4f8834b7ede675eb1e00ec4772d74ae1c41af7f", [
+        _GH_AS + _HQ_VOCAL_YAML, _RAW_CFG + _HQ_VOCAL_YAML]),
 }
 # audio-separator 第一次載入模型時要的設定檔；raw.githubusercontent 不通時改走 jsDelivr
 _RAW = "https://raw.githubusercontent.com/TRvlvr/application_data/main/"
@@ -1283,12 +1304,22 @@ MODEL_DATA = {
 HQ_FILES = {k: MODEL_FILES[k] for k in (HQ_KARAOKE, _HQ_YAML)}
 HQ_DL = {"state": "idle", "got": 0, "total": HQ_FILES[HQ_KARAOKE][0], "error": ""}
 _hq_lock = threading.Lock()
+HQV_FILES = {k: MODEL_FILES[k] for k in (HQ_VOCAL, _HQ_VOCAL_YAML)}
+HQV_DL = {"state": "idle", "got": 0, "total": HQV_FILES[HQ_VOCAL][0], "error": ""}
+
+
+def hqv_ready() -> bool:
+    return _files_ready(HQV_FILES)
 
 
 def hq_ready() -> bool:
     """高品質模型已經完整下載（大小完全正確才算，避免下載到一半的檔案被當成可用）。"""
+    return _files_ready(HQ_FILES)
+
+
+def _files_ready(files: dict) -> bool:
     uvr = MODELS / "uvr"
-    for name, (size, _, _) in HQ_FILES.items():
+    for name, (size, _, _) in files.items():
         p = uvr / name
         if not p.exists() or (size and p.stat().st_size != size) or p.stat().st_size == 0:
             return False
@@ -1469,18 +1500,27 @@ def ensure_model(name: str, progress=None) -> None:
 
 def start_hq_download() -> None:
     """在背景下載高品質主唱分離模型（約 900 MB），不佔用處理歌曲的佇列。"""
+    _start_download(HQ_FILES, HQ_DL, hq_ready)
+
+
+def start_hqv_download() -> None:
+    """在背景下載高品質人聲／伴奏分離模型（約 640 MB）。"""
+    _start_download(HQV_FILES, HQV_DL, hqv_ready)
+
+
+def _start_download(files: dict, tracker: dict, ready) -> None:
     with _hq_lock:
-        if HQ_DL["state"] == "downloading" or hq_ready():
+        if tracker["state"] == "downloading" or ready():
             return
-        HQ_DL.update(state="downloading", error="")
+        tracker.update(state="downloading", error="")
 
     def run():
         try:
-            for name in HQ_FILES:
-                ensure_model(name, lambda got, total, spd: HQ_DL.update(got=got))
-            HQ_DL.update(state="done", got=HQ_DL["total"])
+            for name in files:
+                ensure_model(name, lambda got, total, spd: tracker.update(got=got))
+            tracker.update(state="done", got=tracker["total"])
         except Exception as e:
-            HQ_DL.update(state="error", error=f"{type(e).__name__}: {e}")
+            tracker.update(state="error", error=f"{type(e).__name__}: {e}")
     threading.Thread(target=run, daemon=True).start()
 
 
@@ -1488,6 +1528,22 @@ def hq_status() -> dict:
     if HQ_DL["state"] in ("idle", "done") and hq_ready():
         return {"state": "ready"}
     return dict(HQ_DL)
+
+
+def hqv_status() -> dict:
+    if HQV_DL["state"] in ("idle", "done") and hqv_ready():
+        return {"state": "ready"}
+    return dict(HQV_DL)
+
+
+def vocal_model(cfg: dict) -> str:
+    """要用的人聲／伴奏分離模型。高品質模型還沒下載好時，這首先用標準模型，模型在背景下載。"""
+    q = cfg.get("vocal_quality", "auto")
+    if q == "high" or (q == "auto" and cuda_ok()):
+        if hqv_ready():
+            return HQ_VOCAL
+        start_hqv_download()
+    return cfg["separation_model"]
 
 
 def karaoke_model(cfg: dict) -> str:
@@ -1544,9 +1600,18 @@ def fine_job(song_id: str, after=None):
         cfg["karaoke_overlap"] = 4
         if cfg.get("karaoke_quality") == "standard":
             cfg["karaoke_quality"] = "auto"
+        full = hq_models_ready(cfg)   # 高品質模型都在：這次就等於直播後的補做
+        lrc = (d / "lyrics.lrc").exists()
+        fit_before = lyrics_timing_fit(d) if lrc else None
         step_separate(d, cfg, report)
         step_pitch(d, cfg, report)
-        update_meta(d, fine_suggest=False, fine_done=True, fine_queued=False)
+        update_meta(d, fine_suggest=False, fine_done=True, fine_queued=False,
+                    **({"live_light": False} if full else {}))
+        if lrc:
+            try:
+                check_lyrics_after_reseparate(d, fit_before)
+            except Exception as e:
+                log_error("check_lyrics_after_reseparate", e)
         if after:
             try:
                 after(song_id)
@@ -1645,11 +1710,15 @@ def separate_uvr(d: Path, cfg: dict, report) -> None:
                                  "overlap": overlap, "pitch_shift": 0})
 
     report("準備人聲分離模型", 0.07)
-    ensure_model(cfg["separation_model"], _dl_report(report, "人聲分離模型", 0.07))
-    report("分離人聲與伴奏", 0.08)
-    sep.load_model(model_filename=cfg["separation_model"])
-    with _sep_progress("分離人聲與伴奏", report, 0.08, 0.26):
+    vmodel = vocal_model(cfg)
+    vhq = vmodel == HQ_VOCAL
+    ensure_model(vmodel, _dl_report(report, "人聲分離模型", 0.07))
+    vlabel = "分離人聲與伴奏" + ("（高品質）" if vhq else "（高品質模型下載中，這首先用標準模型）" if HQV_DL["state"] == "downloading" else "")
+    report(vlabel, 0.08)
+    sep.load_model(model_filename=vmodel)
+    with _sep_progress(vlabel, report, 0.08, 0.26):
         outs = _outputs(sep.separate(str(stem_path(d, "mix"))), tmp)
+    update_meta(d, vocal_model="bs_roformer" if vhq else "mdx")   # 之後可以找出還沒用新模型處理的歌
     voc = tmp / "vocals_only.wav"
     _pick(outs, "vocals").replace(voc)
     inst_p = _pick(outs, "instrumental")
@@ -2138,7 +2207,9 @@ def to_taiwan(text: str) -> str:
         from opencc import OpenCC
     except ImportError:
         return text
-    for conf in ("s2twp", "s2twp.json"):
+    # 只做簡體→繁體的字形轉換（s2tw）。以前用的 s2twp 還會把詞換成台灣慣用語
+    # （例如「信息→資訊」「出租車→計程車」），會改到歌詞原本的用字，所以不用
+    for conf in ("s2tw", "s2tw.json"):
         try:
             return OpenCC(conf).convert(text)
         except Exception:
@@ -2798,19 +2869,125 @@ class JobCancelled(Exception):
     """工作被新的要求取代（例如又換了 KEY），中途停止。"""
 
 
+# ---------------------------------------------------------------- 直播中暫停背景處理（2.1.0）
+# 分離、辨識會把顯示卡吃滿，直播畫面和 VTube Studio 的模型追蹤會掉格。
+# 偵測到直播軟體在跑、或練唱台的直播模式開著時，背景的重工作（升級、細修、最高品質、壓縮）先停住；結束後自動繼續。
+# 直播中自己匯入的歌照常處理，但改用輕量模型（標準分離），處理快、佔顯示卡時間短，
+# 直播結束後再自動用高品質模型補做一次（live_light 標記）。KEY 轉換、錄音評分照常。
+LIVE_HOLD = {"apps": [], "live_seen": 0.0, "override_until": 0.0, "checked": 0.0}
+_live_lock = threading.Lock()
+
+
+def _running_apps(names: list[str]) -> list[str]:
+    if sys.platform != "win32" or not names:
+        return []
+    try:
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        out = subprocess.run(["tasklist", "/FO", "CSV", "/NH"], capture_output=True, text=True,
+                             timeout=10, creationflags=flags, encoding="utf-8", errors="ignore").stdout
+    except Exception:
+        return []
+    low = out.lower()
+    return [n for n in names if f'"{n.lower()}"' in low]
+
+
+def live_touch() -> None:
+    """練唱台畫面在直播模式時每隔幾秒呼叫一次。"""
+    LIVE_HOLD["live_seen"] = time.time()
+
+
+def live_override(seconds: float = 3600) -> None:
+    """使用者按「直播中也照常處理」：暫時不管偵測結果。"""
+    LIVE_HOLD["override_until"] = time.time() + seconds
+
+
+def live_status(cfg: dict | None = None) -> dict:
+    """現在該不該暫停重工作，以及原因（給狀態列顯示）。每 15 秒才真的去查一次程式清單。"""
+    cfg = cfg or load_config()
+    now = time.time()
+    if not cfg.get("pause_while_streaming", True):
+        return {"hold": False, "reason": "", "apps": []}
+    if now < LIVE_HOLD["override_until"]:
+        return {"hold": False, "reason": "", "apps": [], "override": True}
+    with _live_lock:
+        if now - LIVE_HOLD["checked"] > 15:
+            LIVE_HOLD["checked"] = now
+            LIVE_HOLD["apps"] = _running_apps(cfg.get("streaming_apps") or [])
+    apps = list(LIVE_HOLD["apps"])
+    live = now - LIVE_HOLD["live_seen"] < 20
+    if apps:
+        return {"hold": True, "reason": "偵測到 " + "、".join(a.rsplit(".", 1)[0] for a in apps), "apps": apps}
+    if live:
+        return {"hold": True, "reason": "直播模式開著", "apps": []}
+    return {"hold": False, "reason": "", "apps": []}
+
+
+# 直播中要先停住的背景工作（使用者沒有在等結果的）
+LIVE_BACKGROUND = {"upgrade", "fine", "compact", "max"}
+
+
+class JobDeferred(Exception):
+    """背景工作做到一半開播：放回佇列，直播結束後從頭再做（不佔著佇列擋住直播中的匯入）。"""
+
+
+def wants_hq(cfg: dict) -> bool:
+    """這台電腦平常會不會用高品質（較慢、較吃顯示卡）的分離模型。"""
+    def hq(key):
+        q = cfg.get(key, "auto")
+        return q == "high" or (q == "auto" and cuda_ok())
+    return hq("vocal_quality") or hq("karaoke_quality")
+
+
+def hq_models_ready(cfg: dict) -> bool:
+    """平常要用的高品質模型都下載好了（直播後補做才有意義）。"""
+    def hq(key):
+        q = cfg.get(key, "auto")
+        return q == "high" or (q == "auto" and cuda_ok())
+    return (not hq("vocal_quality") or hqv_ready()) and (not hq("karaoke_quality") or hq_ready())
+
+
+def live_light_cfg(cfg: dict) -> dict | None:
+    """直播中匯入：回傳要改用的輕量設定；不在直播或本來就用標準模型時回傳 None。"""
+    if not live_status(cfg)["hold"] or not wants_hq(cfg):
+        return None
+    return {"vocal_quality": "standard", "karaoke_quality": "standard", "auto_recognize_lyrics": False}
+
+
 class Jobs:
     """一次只跑一個重工作，避免記憶體爆掉。"""
 
-    def __init__(self):
+    def __init__(self, live_safe: bool = False):
         self.pending: list[tuple[str, object]] = []   # 排隊中的工作（可以調整順序）
         self.state: dict[str, dict] = {}
         self.lock = threading.Lock()
         self.cv = threading.Condition(self.lock)
+        self.live_safe = live_safe   # 直播中要不要暫停（只有重工作的佇列開）
+        self.holding = ""            # 目前因為直播暫停中的原因（空字串＝沒有暫停）
         threading.Thread(target=self._run, daemon=True).start()
+
+    def _held(self, jid: str) -> bool:
+        st = self.state.get(jid) or {}
+        return self.live_safe and st.get("label") in LIVE_BACKGROUND
+
+    def _next(self, hold: bool):
+        """挑下一個要做的工作。直播中跳過背景工作，先做使用者在等的（例如直播中匯入的歌）。"""
+        for n, (jid, fn) in enumerate(self.pending):
+            st = self.state.get(jid) or {}
+            if st.get("status") == "cancelled":
+                self.pending.pop(n)
+                return jid, None
+            if hold and st.get("label") in LIVE_BACKGROUND:
+                continue
+            self.pending.pop(n)
+            return jid, fn
+        return None, None
 
     def submit(self, kind: str, song_id: str, fn, label: str = "") -> str:
         jid = uuid.uuid4().hex[:10]
         with self.cv:
+            old = time.time() - 3600   # 結束超過一小時的工作紀錄不用再留（大量匯入時會累積上千筆）
+            for k in [k for k, j in self.state.items() if j.get("finished", old + 1) < old]:
+                del self.state[k]
             self.state[jid] = {"id": jid, "kind": kind, "song": song_id, "label": label,
                                "status": "queued", "step": "排隊中", "progress": 0.0,
                                "error": None, "created": time.time()}
@@ -2852,7 +3029,12 @@ class Jobs:
 
     def update(self, jid: str, **kw) -> None:
         with self.lock:
-            self.state[jid].update(kw)
+            j = self.state.get(jid)
+            if j is None:
+                return
+            if kw.get("status") in ("done", "error", "cancelled"):
+                kw.setdefault("finished", time.time())
+            j.update(kw)
 
     def get(self, jid: str) -> dict | None:
         with self.lock:
@@ -2864,7 +3046,7 @@ class Jobs:
         order = self.order()
         with self.lock:
             out = [dict(j, order=order.get(j["id"])) for j in self.state.values() if j["status"] != "cancelled"
-                   and (j["status"] in ("queued", "running") or j["created"] > cutoff)]
+                   and (j["status"] in ("queued", "running") or j.get("finished", j["created"]) > cutoff)]
         # 執行中的在前，排隊中的依目前順序
         return sorted(out, key=lambda j: (j["status"] != "running", j["order"] if j["order"] is not None else -1,
                                           j["created"]))
@@ -2922,21 +3104,42 @@ class Jobs:
 
     def _run(self):
         while True:
-            with self.cv:
-                while not self.pending:
-                    self.cv.wait()
-                jid, fn = self.pending.pop(0)
-            if self.get(jid)["status"] == "cancelled":
+            while True:
+                st = live_status() if self.live_safe else {"hold": False}   # 查程式清單可能要幾秒，不要鎖著佇列查
+                with self.cv:
+                    jid, fn = self._next(st["hold"])
+                    if jid:
+                        break
+                    if self.pending:   # 只剩直播中暫停的背景工作
+                        reason = st.get("reason") or "直播中"
+                        self.holding = reason
+                        for j, _ in self.pending:
+                            js = self.state.get(j)
+                            if js and js["status"] == "queued":
+                                js["step"] = f"直播中暫停（{reason}），結束後自動繼續"
+                        self.cv.wait(5)
+                    else:
+                        self.holding = ""
+                        self.cv.wait()
+            self.holding = ""
+            if fn is None or self.get(jid)["status"] == "cancelled":
                 continue
             self.update(jid, status="running", step="開始")
 
             def report(step, p, jid=jid):
-                if self.state[jid].get("cancel"):
+                if (self.state.get(jid) or {}).get("cancel"):
                     raise JobCancelled()
                 self.update(jid, step=step, progress=round(p, 3))
+                if self._held(jid) and live_status()["hold"]:
+                    raise JobDeferred()   # 做到一半開播：讓出顯示卡，直播後重做
             try:
                 fn(report)
                 self.update(jid, status="done", step="完成", progress=1.0)
+            except JobDeferred:
+                with self.cv:
+                    self.state[jid].update(status="queued", step="直播中暫停，結束後重新開始", progress=0.0)
+                    self.pending.append((jid, fn))
+                free_gpu()
             except JobCancelled:
                 self.update(jid, status="cancelled", step="已取消")
             except UserError as e:
@@ -2951,13 +3154,27 @@ def process_song(song_id: str, steps: list[str], cfg_override: dict | None = Non
         d = song_dir(song_id)
         cfg = dict(load_config(), **(cfg_override or {}))
         meta = read_meta(d)
+        recheck = "import" not in steps and ("separate" in steps or "pitch" in steps) and (d / "lyrics.lrc").exists()
+        fit_before = lyrics_timing_fit(d) if recheck else None   # 重新分離前，歌詞和舊的歌聲位置吻合度
         if "import" in steps or not meta["steps"].get("import"):
             step_import(d, report)
         if "separate" in steps:
+            light = live_light_cfg(cfg) if "import" in steps else None
+            if light:   # 直播中匯入：先用輕量模型，直播結束後自動補做高品質
+                cfg.update(light)
+                update_meta(d, live_light=True)
+                report("直播中：改用輕量模型分離（下播後自動補做高品質）", 0.1)
             step_separate(d, cfg, report)
+            if not light and meta.get("live_light"):
+                update_meta(d, live_light=False)   # 高品質補做完成
             measure_stem_loudness(d)   # 各音軌響度，播放時依開著的音軌調整音量
         if "pitch" in steps:
             step_pitch(d, cfg, report)
+        if recheck:
+            try:
+                check_lyrics_after_reseparate(d, fit_before)
+            except Exception as e:
+                log_error("check_lyrics_after_reseparate", e)
         if "lyrics" in steps and "import" in steps and not cfg.get("auto_recognize_lyrics", False):
             # 1.6.5：匯入時預設不自動辨識（準度不穩、又佔顯示卡），直接套用線上搜尋到的第一個版本
             report("排入線上歌詞搜尋（背景進行）", 0.97)
@@ -3103,7 +3320,7 @@ def similarity(recognized: str, candidate: str) -> float | None:
     return round(sum(x.size for x in m.get_matching_blocks()) / len(a), 3)
 
 
-USER_AGENT = "LeihuLiantai/2.0.1 (+https://github.com/samael-leung/Leihu-singsing)"   # HTTP 標頭只能用英文字
+USER_AGENT = "LeihuLiantai/2.1.1 (+https://github.com/samael-leung/Leihu-singsing)"   # HTTP 標頭只能用英文字
 
 
 def _http_json(url: str, headers: dict | None = None, timeout: int = 8):
@@ -3259,6 +3476,11 @@ def find_candidates(d: Path, cfg: dict, query: str = "", check=None,
         out.append(c)
 
     title = _norm(" ".join(filter(None, [meta.get("title"), meta.get("yt_track"), meta.get("yt_artist")])))
+    # 2.1.0：有時間軸的候選，拿它的時間軸和這首歌主唱開口的位置比對，算出「吻合度」0～1。
+    # 歌名和長度都一樣、但其實是翻唱版、不同剪輯版的，吻合度會明顯比較低，自動套用時就不會挑到
+    phrases = voice_phrases(d)
+    for c in out:
+        c["voice_fit"] = timeline_fit(c, phrases, dur) if (c["synced"] and phrases) else None
 
     def score(c):
         # 歌名吻合度：候選的歌名（與歌手）有多少字出現在這首歌的標題裡；和辨識結果無關
@@ -3268,9 +3490,69 @@ def find_candidates(d: Path, cfg: dict, query: str = "", check=None,
         base = 0.5 * c["title_match"] - pen + (0.08 if c["synced"] else 0)
         if reliable and c["similarity"] is not None:   # 辨識可靠時，相似度才拿來參考
             base += c["similarity"]
+        if c.get("voice_fit") is not None:
+            base += 0.6 * (c["voice_fit"] - 0.5)   # 吻合的加分、不吻合的扣分（±0.3）
         return -base
     out.sort(key=score)
     return list(dict.fromkeys(tried)), out[:12]
+
+
+def timeline_fit(c: dict, phrases: list[tuple[float, float]], dur: float | None) -> float | None:
+    """候選歌詞的時間軸和這首歌主唱開口位置的吻合度（0～1）。
+    依網站的時間軸（長度不同時先依比例與位移對齊，和套用時的做法相同）算每一句開頭離最近一次開口多遠：
+    0.3 秒內算吻合，愈遠分數愈低。句子太少時不算。"""
+    times = [l["t"] for l in parse_lrc(c["synced"]) if l["t"] is not None and l["text"].strip()]
+    if len(times) < 4 or len(phrases) < 2:
+        return None
+    ts = np.array(times, dtype=float)
+    r = None
+    try:
+        r = voice_fit(times, _PhraseStub(phrases), c.get("duration"), dur)   # 需要整體對齊時先對齊
+    except Exception:
+        r = None
+    if r:
+        ts = ts * r[0] + r[1]
+    onsets = np.array([a for a, _ in phrases])
+    k = np.clip(np.searchsorted(onsets, ts), 1, len(onsets) - 1)
+    dist = np.minimum(np.abs(ts - onsets[k - 1]), np.abs(ts - onsets[k]))
+    return round(float(np.mean(np.exp(-(dist ** 2) / (2 * 0.35 ** 2)))), 2)
+
+
+def lyrics_timing_fit(d: Path) -> float | None:
+    """目前歌詞的時間軸（不做整體對齊，就是現在顯示的位置）和主唱開口位置的吻合度（0～1）。"""
+    try:
+        times = [l["t"] for l in lyric_lines(d) if l["text"].strip()]
+    except Exception:
+        return None
+    phrases = voice_phrases(d)
+    if len(times) < 4 or len(phrases) < 2:
+        return None
+    ts = np.array(times, dtype=float)
+    onsets = np.array([a for a, _ in phrases])
+    k = np.clip(np.searchsorted(onsets, ts), 1, len(onsets) - 1)
+    dist = np.minimum(np.abs(ts - onsets[k - 1]), np.abs(ts - onsets[k]))
+    return round(float(np.mean(np.exp(-(dist ** 2) / (2 * 0.35 ** 2)))), 2)
+
+
+def check_lyrics_after_reseparate(d: Path, before: float | None) -> None:
+    """2.1.0：重新分離／分析旋律後，目前的歌詞和新的歌聲位置對不太上 → 標「建議重新匯入歌詞」。
+    標記記下當時歌詞檔的時間，之後歌詞有改過（重新匯入、套用線上歌詞、手動調整）就自動消失。"""
+    after = lyrics_timing_fit(d)
+    bad = after is not None and (after < 0.55 or (before is not None and before - after >= 0.2))
+    rec = None
+    if bad:
+        try:
+            mt = (d / "lyrics.lrc").stat().st_mtime_ns
+        except OSError:
+            mt = 0
+        rec = {"fit": after, "before": before, "mtime": mt}
+    update_meta(d, lyrics_recheck=rec)
+
+
+class _PhraseStub:
+    """讓 voice_fit 直接用算好的開口段落（不用每個候選都重讀 pitch.json）。"""
+    def __init__(self, phrases):
+        self.phrases = phrases
 
 
 def recognition_reliable(meta: dict) -> bool:
@@ -3308,6 +3590,8 @@ def find_and_store_candidates(d: Path, cfg: dict, check=None, apply_first: bool 
         likely = [c for c in cands if c["similarity"] is None or c["similarity"] >= 0.25]
     else:
         likely = [c for c in cands if c.get("title_match", 0) >= 0.5 or (c["diff"] is not None and c["diff"] <= 5)]
+    # 和歌聲對不上的（吻合度低於 0.5：一半以上的句子離開口超過 0.5 秒）不自動套用，留給使用者自己挑
+    likely = [c for c in likely if c.get("voice_fit") is None or c["voice_fit"] >= 0.5]
     atomic_write_text(d / "lyrics_candidates.json", json.dumps(cands, ensure_ascii=False))
     if meta.get("lyrics_source") in (None, "whisper"):
         update_meta(d, lyrics_pending=bool(likely))
@@ -3332,8 +3616,10 @@ def find_and_store_candidates(d: Path, cfg: dict, check=None, apply_first: bool 
 
 # ---------------------------------------------------------------- 依主唱聲音對時間（不需要辨識結果，任何語言都可以）
 
-def voice_phrases(d: Path, gap: float = 0.35, min_len: float = 0.3) -> list[tuple[float, float]]:
+def voice_phrases(d, gap: float = 0.35, min_len: float = 0.3) -> list[tuple[float, float]]:
     """從旋律分析結果找出「有在唱」的段落 (開始, 結束)。"""
+    if isinstance(d, _PhraseStub):
+        return d.phrases
     try:
         pj = json.loads((d / "pitch.json").read_text("utf-8"))
     except Exception:

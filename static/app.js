@@ -19,7 +19,7 @@ function applyFont(f) {
   if (f === "huninn" && document.fonts) document.fonts.load('20px "jf open huninn"').catch(() => {});
 }
 applyFont(store.get("font", "huninn"));
-fetch("/api/config").then(r => r.json()).then(c => { applyFont(c.font); OUT_LABEL = c.audio_out || ""; applySink(); }).catch(() => {});
+fetch("/api/config").then(r => r.json()).then(c => { applyFont(c.font); OUT_LABEL = c.audio_out || ""; MON_LABEL = c.monitor_out || ""; applySink(); }).catch(() => {});
 
 async function api(path, opts = {}) {
   const o = { ...opts };
@@ -104,15 +104,18 @@ const LIB = { songs: [], cats: [], cur: store.get("libCat", "__all__"), q: "" };
 async function loadSongs() {
   const [songs, cats] = await Promise.all([api("/api/songs"), api("/api/categories")]);
   LIB.songs = songs; LIB.cats = cats;
-  if (LIB.cur !== "__all__" && LIB.cur !== "__none__" && !cats.includes(LIB.cur)) LIB.cur = "__all__";
+  if (!["__all__", "__none__", "__flag__"].includes(LIB.cur) && !cats.includes(LIB.cur)) LIB.cur = "__all__";
   songs.forEach(s => (titles[s.id] = s.title));
   renderCats(); renderSongs();
   if (LIB.q) libSearch();
 }
+// 歌詞待修：直播中手動標記的，或重新分離後歌詞和歌聲對不太上的（2.1.0）
+const lyrNeedsFix = s => !!(s.lyrics_flag || s.lyrics_recheck);
 function renderCats() {
   const box = $("#cats"); box.innerHTML = "";
-  const count = c => LIB.songs.filter(s => c === "__all__" || (c === "__none__" ? !s.category : s.category === c)).length;
+  const count = c => LIB.songs.filter(s => c === "__all__" || (c === "__flag__" ? lyrNeedsFix(s) : c === "__none__" ? !s.category : s.category === c)).length;
   const items = [["__all__", "全部"], ...LIB.cats.map(c => [c, c]), ["__none__", "未分類"]];
+  if (LIB.songs.some(lyrNeedsFix) || LIB.cur === "__flag__") items.push(["__flag__", "歌詞待修"]);
   for (const [key, label] of items) {
     if (key === "__none__" && !LIB.cats.length) continue;
     const b = document.createElement("button");
@@ -217,8 +220,11 @@ $("#cat-del").onclick = async () => {
   loadSongs();
 };
 function songMatches(s) {
-  if (LIB.cur === "__none__" && s.category) return false;
-  if (LIB.cur !== "__all__" && LIB.cur !== "__none__" && s.category !== LIB.cur) return false;
+  if (LIB.cur === "__flag__") { if (!lyrNeedsFix(s)) return false; }
+  else {
+    if (LIB.cur === "__none__" && s.category) return false;
+    if (LIB.cur !== "__all__" && LIB.cur !== "__none__" && s.category !== LIB.cur) return false;
+  }
   if (!LIB.q) return true;
   if (LIB.hits) return LIB.hits.has(s.id);
   const hay = [s.title, s.yt_artist, s.yt_track, s.yt_uploader, s.category, s.lyrics_text,
@@ -247,7 +253,7 @@ $("#live-toggle").onclick = () => setLive(!LIVE.on);
 $$("[data-live-preset]").forEach(b => (b.onclick = () => $(`[data-preset="${b.dataset.livePreset}"]`).click()));
 /* 音量：只影響歌曲（主唱／合音／伴奏），導引音和麥克風不受影響 */
 S.masterVol = store.get("masterVol", 1);
-function syncLiveVol() { $("#live-vol").value = String(S.masterVol); $("#live-vol-v").textContent = Math.round(S.masterVol * 100); if (S.master) S.master.gain.value = S.masterVol; }
+function syncLiveVol() { $("#live-vol").value = String(S.masterVol); $("#live-vol-v").textContent = Math.round(S.masterVol * 100); if (S.master) S.master.gain.value = S.masterVol; syncMonGain(); }
 $("#live-vol").oninput = e => { S.masterVol = +e.target.value; store.set("masterVol", S.masterVol); syncLiveVol(); };
 syncLiveVol();
 function liveAdjust(which, d) {
@@ -345,6 +351,24 @@ $("#lv-search").onclick = () => {
   $("#ls-dlg").hidden = false;
   if (!$("#ls-results").children.length) searchLyrics("");
 };
+/* 歌詞待修標記：直播中發現不準，按一下先標起來；歌曲庫多一個「歌詞待修」分類可以篩出來 */
+function syncFlagBtns() {
+  const on = !!(S.song && S.song.lyrics_flag);
+  for (const id of ["#lyr-flag", "#lv-flag"]) { const b = $(id); b.classList.toggle("on", on); b.textContent = on ? "已標待修" : "歌詞待修"; }
+}
+async function toggleLyricsFlag() {
+  if (!S.song) return toast("還沒選歌");
+  const on = !S.song.lyrics_flag;
+  try {
+    await api(`/api/songs/${S.song.id}`, { method: "PATCH", json: { lyrics_flag: on } });
+    S.song.lyrics_flag = on;
+    const s = LIB.songs.find(x => x.id === S.song.id); if (s) s.lyrics_flag = on;
+    syncFlagBtns(); renderCats();
+    toast(on ? "已標記「歌詞待修」，下播後在歌曲庫的「歌詞待修」分類找得到" : "已取消歌詞待修標記", 3000);
+  } catch (e) { toast(e.message); }
+}
+$("#lyr-flag").onclick = toggleLyricsFlag;
+$("#lv-flag").onclick = toggleLyricsFlag;
 $("#lsd-close").onclick = () => {
   $("#ls-dlg").hidden = true;
   if (lsHome) lsHome.after($("#ls-box"));
@@ -358,6 +382,7 @@ function liveAction(act) {
   if (act === "play") return S.playing || S.wantPlay ? pause() : play();
   if (act === "now") return liveAdjust("cur");
   if (act === "next-line") return liveAdjust("next");
+  if (act === "flag") return toggleLyricsFlag();
   if (act === "minus") return liveAdjust("cur", -0.1);
   if (act === "plus") return liveAdjust("cur", 0.1);
   if (act === "mode") {
@@ -401,13 +426,15 @@ function queueAdd(id) {
   toast(`已加入待唱清單（第 ${LIVE.queue.length} 首）`, 1500);
 }
 async function queueNext() {
-  const id = LIVE.queue.shift();
+  const id = LIVE.queue[0];
   if (!id) return toast("待唱清單是空的");
-  saveQueue();
   pause();
-  await openSong(id);
+  try { await openSong(id); }
+  catch (e) { return toast("載入失敗，這首還留在待唱清單：" + e.message, 4000); }
+  LIVE.queue = LIVE.queue.filter(x => x !== id);   // 載入成功才從清單拿掉
+  saveQueue();
   renderSongs();
-  toast(`已載入：${S.song.title}，按播放開始`, 3000);
+  if (S.song && S.song.id === id) toast(`已載入：${S.song.title}，按播放開始`, 3000);
 }
 $("#lq-next").onclick = () => queueNext();
 $("#lq-clear").onclick = () => { if (LIVE.queue.length && confirm("清空待唱清單？")) { LIVE.queue = []; saveQueue(); } };
@@ -530,7 +557,7 @@ function renderLiveSongs(box, list) {
     el.disabled = !ok;
     el.title = ok ? "開始這首" : "還沒處理好";
     el.innerHTML = `<span class="t"></span><span class="a"></span>${ok ? `<span class="add" role="button" title="加進待唱清單">＋</span>` : ""}`;
-    $(".t", el).textContent = s.title;
+    $(".t", el).textContent = (lyrNeedsFix(s) ? "⚑ " : "") + s.title;
     $(".a", el).textContent = [s.artist, s.key ? `KEY ${s.key > 0 ? "+" : ""}${s.key}` : ""].filter(Boolean).join("・");
     el.onclick = e => {
       if (e.target.classList.contains("add")) { e.stopPropagation(); return queueAdd(s.id); }
@@ -543,13 +570,18 @@ function renderLiveSongs(box, list) {
 
 function renderSongs() {
   const box = $("#songs");
+  const keepTop = box.scrollTop;
   box.innerHTML = "";
   if (!LIB.songs.length) {
     box.innerHTML = `<div class="empty">歌曲庫是空的。匯入第一首歌，處理完就能開始練。</div>`;
     return;
   }
   const list = LIB.songs.filter(songMatches);
-  if (window.LIVE && LIVE.on) { renderQueue(); return renderLiveSongs(box, list); }
+  if (window.LIVE && LIVE.on) {   // 背景工作完成時會重畫清單：保留捲動位置，不會突然跳回最上面
+    renderQueue(); renderLiveSongs(box, list);
+    box.scrollTop = keepTop;
+    return;
+  }
   const inCat = s => !(LIB.cur === "__none__" && s.category) && (LIB.cur === "__all__" || LIB.cur === "__none__" || s.category === LIB.cur);
   const sim = LIB.q ? LIB.similar.map(id => LIB.songs.find(s => s.id === id)).filter(s => s && inCat(s) && !list.includes(s)) : [];
   if (!list.length && !sim.length) {
@@ -597,6 +629,8 @@ function renderSongs() {
       chips.push(`<span class="chip warn" title="自動辨識不夠準確，已先留白">建議找線上歌詞</span>`);
     else chips.push(`<span class="chip ${st.lyrics ? "ok" : ""}">${st.lyrics ? "歌詞" : "無歌詞"}</span>`);
     if (s.lyrics_pending) chips.push(`<span class="chip warn">有線上歌詞可選</span>`);
+    if (s.lyrics_flag) chips.push(`<span class="chip warn" title="直播中標記的：歌詞不準，待處理">⚑ 歌詞待修</span>`);
+    if (s.lyrics_recheck) chips.push(`<span class="chip warn" title="重新分離後，目前歌詞和歌聲的位置對不太上（吻合度 ${Math.round((s.lyrics_recheck.fit || 0) * 100)}%）。重新搜尋線上歌詞或重新貼上後，這個提醒會自動消失">⚑ 建議重新匯入歌詞</span>`);
     if (s.takes) chips.push(`<span>${s.takes} 次錄音</span>`);
     if (s.best != null) chips.push(`<span>最佳 <b class="num">${Math.round(s.best * 100)}%</b></span>`);
     el.innerHTML = `
@@ -897,7 +931,8 @@ const ST = {};                  // 伺服器狀態（高品質模型等）
 async function pollJobs() {
   clearTimeout(jobTimer);
   let st;
-  try { st = await api("/api/status"); } catch { jobTimer = setTimeout(pollJobs, 3000); return; }
+  try { st = await api(`/api/status${window.LIVE && LIVE.on ? "?live=1" : ""}`); } catch { jobTimer = setTimeout(pollJobs, 3000); return; }
+  syncLiveHold(st.live);
   updateAIChip(st.ai_ready, st.session_cost, st.ai_provider);
   remoteOpen(st.remote);
   syncYtPause(st.yt_pause);
@@ -951,21 +986,24 @@ async function pollJobs() {
     more.textContent = `……還有 ${st.queued_total - 30} 首排隊中（共 ${st.queued_total} 首）`;
     box.appendChild(more);
   }
-  // 高品質主唱分離模型在背景下載時，顯示下載進度
+  // 高品質模型在背景下載時，顯示下載進度（主唱／合音模型、人聲／伴奏模型）
   ST.hq = st.hq; ST.hqModel = st.hq_model;
-  if (st.hq && (st.hq.state === "downloading" || st.hq.state === "error")) {
+  for (const [dl, name] of [[st.hq, "高品質主唱分離模型"], [st.hqv, "高品質人聲分離模型"]]) {
+    if (!dl || !(dl.state === "downloading" || dl.state === "error")) continue;
     const el = document.createElement("div");
     const mb = v => Math.round(v / 1e6);
-    const p = st.hq.total ? st.hq.got / st.hq.total : 0;
-    el.className = "job" + (st.hq.state === "error" ? " error" : "");
+    const p = dl.total ? dl.got / dl.total : 0;
+    el.className = "job" + (dl.state === "error" ? " error" : "");
     el.innerHTML = `<span class="lbl"></span><span class="num">${Math.round(p * 100)}%</span><span></span>
       <div class="meter"><i style="width:${Math.round(p * 100)}%"></i></div><div class="err"></div>`;
-    $(".lbl", el).textContent = st.hq.state === "error" ? "高品質主唱分離模型下載失敗，下次處理歌曲時會再試"
-      : `背景下載高品質主唱分離模型 ${mb(st.hq.got)} / ${mb(st.hq.total)} MB（期間的歌會先用標準模型）`;
-    $(".err", el).textContent = st.hq.state === "error" ? st.hq.error : "";
+    $(".lbl", el).textContent = dl.state === "error" ? `${name}下載失敗，下次處理歌曲時會再試`
+      : `背景下載${name} ${mb(dl.got)} / ${mb(dl.total)} MB（期間的歌會先用標準模型）`;
+    $(".err", el).textContent = dl.state === "error" ? dl.error : "";
     box.appendChild(el);
     busy = true;
   }
+  if (ST.hqvWas === "downloading" && st.hqv && st.hqv.state === "ready") toast("高品質人聲分離模型下載完成，之後匯入的歌會自動使用；舊歌可以在設定裡一鍵重做", 6000);
+  ST.hqvWas = st.hqv ? st.hqv.state : null;
   if (ST.hqWas === "downloading" && st.hq && st.hq.state === "ready" && !$("#view-lib").hidden) {
     toast("高品質主唱分離模型下載完成，之後匯入的歌會自動使用", 4000); loadSongs();
   }
@@ -1007,6 +1045,19 @@ $("#update-chip").addEventListener("click", async e => {
   try { await api("/api/update/install", { method: "POST", json: {} }); c.textContent = "下載更新 0%…"; pollJobs(); }
   catch (err) { toast(err.message); }
 });
+let liveHoldWas = null;
+function syncLiveHold(l) {
+  const on = !!(l && l.hold);
+  const held = on && !!l.holding;   // 真的有背景工作在等才顯示橫幅
+  $("#live-hold").hidden = !held;
+  if (held) $("#live-hold-why").textContent = (l.reason ? `原因：${l.reason}。` : "");
+  if (on && liveHoldWas === false) toast(`直播中（${l.reason}）：背景工作暫停，匯入改用輕量模型`, 4000);
+  liveHoldWas = on;
+}
+$("#live-hold-go").onclick = async () => {
+  if (!confirm("接下來一小時，直播中也照常做分離、分析、辨識？直播畫面和 VTube Studio 可能會掉格。")) return;
+  try { await api("/api/live/override", { json: {} }); toast("一小時內照常處理", 3000); pollJobs(); } catch (e) { toast(e.message); }
+};
 function syncYtPause(p) {
   const on = !!(p && p.on);
   const paused = LIB.songs.filter(s => s.dl_state === "paused").length;
@@ -1106,7 +1157,11 @@ async function openSong(id, fromSongRequest = false) {
       api(`/api/songs/${id}`), api(`/api/songs/${id}/pitch`), api(`/api/songs/${id}/lyrics`),
     ]);
     if (requestId !== songOpenRequest) return;
-    S.song = song; titles[id] = song.title; syncGroupBtn();
+    pause();
+    S.bufs = {}; S.dur = 0;
+    S.song = song; titles[id] = song.title; syncGroupBtn(); syncFlagBtns();
+    { const e = LIB.songs.find(x => x.id === id);
+      if (e && e.lyrics_recheck && !LIVE.on) toast("這首重新分離後，歌詞和歌聲對不太上，建議重新匯入歌詞（搜尋線上歌詞或重新貼上）", 6000); }
     if (window.LIVE) { LIVE.played = 0; LIVE.logged = null; }
     if (!fromSongRequest) {
       songRequestSync.selected(song);
@@ -1297,6 +1352,7 @@ function songBus() {
     S.bus = g;
   }
   S.bus.gain.value = Math.pow(10, normGain() / 20);
+  syncMonGain();
   return S.bus;
 }
 /* 1.6.5：依開著的音軌（音量 ≥ 50%）那一種組合的實際響度計算要加減多少，
@@ -1304,7 +1360,8 @@ function songBus() {
 function songNormDb() {
   const m = S.song;
   if (!m) return 0;
-  const key = ["lead", "back", "inst"].map(k => ((S.vol[k] ?? 1) >= 0.5 ? "1" : "0")).join("");
+  // 「原唱只給我聽」時觀眾聽不到原唱：音量標準化以沒有原唱的組合為準
+  const key = ["lead", "back", "inst"].map(k => ((S.vol[k] ?? 1) >= 0.5 && !(k === "lead" && S.leadPrivate) ? "1" : "0")).join("");
   const lufs = (m.combo_lufs || {})[key];
   if (lufs == null || m.norm_target == null) return m.norm_gain_db || 0;
   const [lo, hi] = m.norm_range || [-15, 12];
@@ -1314,7 +1371,7 @@ function normGain() { return S.normVol && S.song ? songNormDb() : 0; }
 function syncNormUi() {
   $("#norm-vol").checked = S.normVol;
   const db = songNormDb();
-  const key = ["lead", "back", "inst"].map(k => ((S.vol[k] ?? 1) >= 0.5 ? "1" : "0")).join("");
+  const key = ["lead", "back", "inst"].map(k => ((S.vol[k] ?? 1) >= 0.5 && !(k === "lead" && S.leadPrivate) ? "1" : "0")).join("");
   const lufs = S.song ? ((S.song.combo_lufs || {})[key] ?? S.song.lufs) : null;
   $("#norm-db").textContent = lufs != null
     ? `這首 ${lufs.toFixed(1)} LUFS，${S.normVol ? (db >= 0 ? "+" : "") + db.toFixed(1) + " dB" : "未調整"}` : "";
@@ -1359,10 +1416,69 @@ function startNode(k, buf, when, pos) {
   const c = ac();
   const src = c.createBufferSource(); src.buffer = buf;
   const g = c.createGain(); g.gain.value = S.vol[k] ?? 1;
-  src.connect(g).connect(["lead", "back", "inst"].includes(k) ? songBus() : c.destination);
+  src.connect(g);
+  const bus = songBus();
+  const mon = monActive() ? S.mon : null;
+  if (S.leadPrivate && k === "lead") {                             // 原唱：只進自己聽的那一路
+    if (mon) g.connect(mon.lead);
+    else ensureMonitor();   // 自己聽的那一路還沒接好（剛開程式）：原唱先不出聲，絕不送到觀眾那邊
+  }
+  else if (["lead", "back", "inst"].includes(k)) g.connect(bus);   // 觀眾聽的混音（自己那一路也會收到一份）
+  else if (mon && k === "guide") g.connect(mon.dest);              // 導引音：只給自己
+  else { g.connect(c.destination); if (mon) g.connect(mon.dest); }
   src.start(when, pos);
   S.nodes[k] = { src, g };
 }
+
+/* ------------------------------------------------------------ 原唱只給我聽
+   觀眾：伴奏＋合音，走原本的「音樂輸出裝置」。自己：同一份混音再加上原唱和導引音，
+   經由另一個輸出裝置（耳機）播出。兩路在耳機裡是同一條路徑，所以原唱和伴奏不會有時間差 */
+let MON_LABEL = "";
+S.leadPrivate = store.get("leadPrivate", false);
+function monActive() { return !!(S.leadPrivate && S.mon && S.mon.ok); }
+function syncMonGain() {
+  if (S.mon && S.bus) S.mon.lead.gain.value = S.bus.gain.value * (S.masterVol ?? 1);   // 原唱跟著音量標準化和音量拉桿
+}
+async function setupMonitor() {
+  if (!S.leadPrivate) { if (S.mon) { S.mon.ok = false; S.mon.el.pause(); } return false; }
+  if (!MON_LABEL) throw new Error("還沒選「自己聽的裝置」：請到設定選你的耳機");
+  if (MON_LABEL === OUT_LABEL) throw new Error("「自己聽的裝置」和「音樂輸出裝置」是同一個，觀眾也會聽到原唱；請到設定選不同的裝置");
+  const d = (await outDevices()).find(x => x.label === MON_LABEL);
+  if (!d) throw new Error(`找不到自己聽的裝置「${MON_LABEL}」，請確認耳機有接上`);
+  const c = ac();
+  songBus();
+  if (!S.mon) {
+    const dest = c.createMediaStreamDestination(), lead = c.createGain(), el = new Audio();
+    lead.connect(dest); S.master.connect(dest);
+    el.srcObject = dest.stream;
+    S.mon = { dest, lead, el, ok: false };
+  }
+  if (typeof S.mon.el.setSinkId !== "function") throw new Error("這個視窗不支援指定第二個輸出裝置");
+  await S.mon.el.setSinkId(d.deviceId);
+  await S.mon.el.play();
+  S.mon.ok = true;
+  syncMonGain();
+  return true;
+}
+let monPending = false;
+function ensureMonitor() {
+  if (monPending) return;
+  monPending = true;
+  setupMonitor().then(() => { if (S.playing) { pause(); play(); } })
+    .catch(e => toast(e.message + "。原唱目前靜音（沒有送給觀眾）", 7000))
+    .finally(() => { monPending = false; $("#lead-private").classList.toggle("on", S.leadPrivate); });
+}
+async function setLeadPrivate(on, quiet) {
+  S.leadPrivate = on; store.set("leadPrivate", on);
+  try { await setupMonitor(); }
+  catch (e) { S.leadPrivate = false; store.set("leadPrivate", false); if (S.mon) S.mon.ok = false; if (!quiet) toast(e.message, 6000); }
+  $("#lead-private").classList.toggle("on", S.leadPrivate);
+  syncNormUi();
+  if (S.playing) { pause(); play(); }   // 重新接線
+  if (!quiet && S.leadPrivate) toast(`原唱只從「${MON_LABEL}」播出，觀眾那邊只有伴奏和合音`, 4000);
+}
+$("#lead-private").onclick = () => setLeadPrivate(!S.leadPrivate);
+$("#lead-private").classList.toggle("on", S.leadPrivate);
 /* ------------------------------------------------------------ 1.7：旋律譜圖片 */
 (() => {
   const sel = $("#sd-tonic");
@@ -2104,6 +2220,7 @@ function renderCandidates(box, results) {
     const simCls = sim == null ? "lo" : sim >= 0.6 ? "hi" : sim >= 0.35 ? "mid" : "lo";
     el.innerHTML = `<div class="h"><b></b><span class="hint"></span>
         ${sim == null ? "" : `<span class="sim ${simCls}">相似度 ${Math.round(sim * 100)}%</span>`}
+        ${it.voice_fit == null ? "" : `<span class="sim ${it.voice_fit >= 0.75 ? "hi" : it.voice_fit >= 0.5 ? "mid" : "lo"}" title="這版的時間軸和這首歌主唱開口位置的吻合程度；低於 50% 多半是不同版本（翻唱、現場版、不同剪輯），不會自動套用">和歌聲吻合 ${Math.round(it.voice_fit * 100)}%</span>`}
         ${it.synced ? '<span class="chip ok">有時間軸</span>' : '<span class="chip">純文字</span>'}</div>
       <div class="pv"></div><div class="row"><span class="hint src"></span><button class="primary">使用這版</button></div>`;
     $("b", el).textContent = it.track || "（未命名）";
@@ -3482,10 +3599,12 @@ async function openSettings(focusUsage) {
   $("#cfg-hotkeys").checked = cfg.global_hotkeys !== false;
   renderHotkeys();
   $("#cfg-font").value = cfg.font || "huninn";
-  fillOutDevices(cfg.audio_out || "");
+  fillOutDevices(cfg.audio_out || "", cfg.monitor_out || "");
   $("#cfg-sep").value = cfg.separation_model;
   $("#cfg-kara").value = cfg.karaoke_model;
   $("#cfg-kq").value = cfg.karaoke_quality || "auto";
+  $("#cfg-vq").value = cfg.vocal_quality || "auto";
+  $("#cfg-pause-live").checked = cfg.pause_while_streaming !== false;
   $("#cfg-kov").value = String(cfg.karaoke_overlap === 4 ? 4 : 2);
   $("#cfg-autofine").checked = cfg.auto_fine !== false;
   $("#cfg-pitch").value = cfg.pitch_model;
@@ -3529,8 +3648,8 @@ async function saveSettings(extra = {}) {
       ollama_url: $("#cfg-url").value.trim(), ollama_model: $("#cfg-local-model").value.trim(),
       ollama_auto_model: $("#cfg-auto-model").checked,
       whisper_model: $("#cfg-whisper").value, lyrics_language: $("#cfg-lang").value,
-      convert_to_taiwan: $("#cfg-tw").checked, auto_recognize_lyrics: $("#cfg-autorec").checked, global_hotkeys: $("#cfg-hotkeys").checked, font: $("#cfg-font").value, audio_out: $("#cfg-out").value, separation_model: $("#cfg-sep").value.trim(),
-      karaoke_model: $("#cfg-kara").value.trim(), karaoke_quality: $("#cfg-kq").value, karaoke_overlap: +$("#cfg-kov").value, auto_fine: $("#cfg-autofine").checked, pitch_model: $("#cfg-pitch").value,
+      convert_to_taiwan: $("#cfg-tw").checked, auto_recognize_lyrics: $("#cfg-autorec").checked, global_hotkeys: $("#cfg-hotkeys").checked, font: $("#cfg-font").value, audio_out: $("#cfg-out").value, monitor_out: $("#cfg-mon").value, separation_model: $("#cfg-sep").value.trim(),
+      karaoke_model: $("#cfg-kara").value.trim(), karaoke_quality: $("#cfg-kq").value, vocal_quality: $("#cfg-vq").value, pause_while_streaming: $("#cfg-pause-live").checked, karaoke_overlap: +$("#cfg-kov").value, auto_fine: $("#cfg-autofine").checked, pitch_model: $("#cfg-pitch").value,
       ...extra,
     };
     for (const name of ["openai", "claude", "gemini"]) {
@@ -3541,6 +3660,8 @@ async function saveSettings(extra = {}) {
     const cfg = await api("/api/config", {json: body});
     applyFont(cfg.font);
     OUT_LABEL = cfg.audio_out || ""; applySink();
+    MON_LABEL = cfg.monitor_out || "";
+    if (S.leadPrivate) setLeadPrivate(true, false);
     settingsKeys = cfg.has_keys || {};
     for (const name of ["openai", "claude", "gemini"]) $("#cfg-" + name + "-key").value = "";
     if (body.ai_mode === "local") {
@@ -3568,16 +3689,26 @@ $("#cfg-clear-api-key").onclick = async () => {
     settingsKeys = cfg.has_keys || {}; updateAIMode(); toast("已清除儲存的金鑰；環境變數需另外移除");
   } catch (e) { toast(e.message); }
 };
-async function fillOutDevices(saved) {
-  const sel = $("#cfg-out");
-  if (!("setSinkId" in AudioContext.prototype)) { sel.disabled = true; sel.title = "這個瀏覽器不支援選擇輸出裝置"; }
+async function fillOutDevices(saved, savedMon = "") {
+  if (!("setSinkId" in AudioContext.prototype)) { $("#cfg-out").disabled = true; $("#cfg-out").title = "這個瀏覽器不支援選擇輸出裝置"; }
   const list = await outDevices().catch(() => []);
-  const opts = [["", "系統預設"], ...list.map(d => [d.label, d.label])];
-  if (saved && !list.some(d => d.label === saved)) opts.push([saved, `${saved}（目前沒有連接）`]);
-  sel.innerHTML = "";
-  for (const [v, t] of opts) { const o = document.createElement("option"); o.value = v; o.textContent = t; sel.append(o); }
-  sel.value = saved;
+  for (const [sel, val, none] of [[$("#cfg-out"), saved, "系統預設"], [$("#cfg-mon"), savedMon, "（未設定）"]]) {
+    const opts = [["", none], ...list.map(d => [d.label, d.label])];
+    if (val && !list.some(d => d.label === val)) opts.push([val, `${val}（目前沒有連接）`]);
+    sel.innerHTML = "";
+    for (const [v, t] of opts) { const o = document.createElement("option"); o.value = v; o.textContent = t; sel.append(o); }
+    sel.value = val;
+  }
 }
+$("#cfg-upgrade").onclick = async () => {
+  const b = $("#cfg-upgrade"); b.disabled = true;
+  try {
+    const r = await api("/api/upgrade-separation", { json: {} });
+    toast(r.queued ? `已排入 ${r.queued} 首，會在背景慢慢重做（直播中會暫停）` : "所有歌都已經是用高品質人聲模型處理的", 5000);
+    pollJobs();
+  } catch (e) { toast(e.message, 6000); }
+  finally { b.disabled = false; }
+};
 $("#open-in-browser").onclick = () => api("/api/open-app", { method: "POST", json: {} })
   .then(r => { $("#settings").hidden = true; toast(r.app ? "已開啟分享用視窗；Discord 分享時選那個視窗，第一次用麥克風時按「允許」" : "已用瀏覽器開啟練唱台；Discord 分享時選那個瀏覽器視窗", 6000); })
   .catch(e => toast(e.message));

@@ -9,7 +9,7 @@ const state={song:{id:'abcdef'},showLyr:true};let parsed,switched=false;
 const context=vm.createContext({S:state,$:selector=>elements[selector.slice(1)],
   api:async(path,opts)=>{if(path.endsWith('/force-align')){assert.equal(opts.json.text,'正確歌詞');return {job:'alignment'};}return {lrc};},
   waitJob:async(id,onStep)=>{onStep({step:'done',progress:1});if(switched)state.song={id:'different'};},
-  toast(){},store:{set(){}},syncLyrButtons(){},pollJobs(){},
+  toast(){},store:{set(){}},syncLyrButtons(){},pollJobs(){},applyLyrState(){},
   setLines:text=>{parsed=text;},commitLines(){throw Error('must not overwrite forced times');},
 });
 vm.runInContext(source.slice(source.indexOf('const CJK ='),source.indexOf('/* 依旋律音符')),context);
