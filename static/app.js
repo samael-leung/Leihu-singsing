@@ -148,7 +148,17 @@ function renderCats() {
   if (real) $("#cat-hint").textContent = `匯入的歌會放進「${LIB.cur}」`;
 }
 /* 搜尋：伺服器端把繁體、簡體統一後比對（輸入繁體也找得到簡體歌名），另外推薦歌名相近的歌 */
-LIB.hits = null; LIB.similar = [];
+LIB.hits = null; LIB.similar = []; LIB.kind = {}; LIB.snip = {}; LIB.rank = new Map();
+// 2.2.1 搜尋範圍：歌名歌手／歌詞／全部（記住上次的選擇）
+LIB.scope = store.get("libScope", "name");
+const SCOPE_PH = { name: "搜尋曲名、歌手", lyrics: "搜尋歌詞（輸入記得的一句）", all: "搜尋曲名、歌手、歌詞" };
+$("#lib-scope").value = LIB.scope;
+$("#lib-q").placeholder = SCOPE_PH[LIB.scope] || SCOPE_PH.name;
+$("#lib-scope").onchange = e => {
+  LIB.scope = e.target.value; store.set("libScope", LIB.scope);
+  $("#lib-q").placeholder = SCOPE_PH[LIB.scope] || SCOPE_PH.name;
+  libSearch();
+};
 let libSearchTimer = 0, libSearchSeq = 0;
 function libSearch() {
   clearTimeout(libSearchTimer);
@@ -156,14 +166,18 @@ function libSearch() {
   libSearchTimer = setTimeout(async () => {
     const seq = ++libSearchSeq, q = LIB.q;
     try {
-      const r = await api(`/api/songs/search?q=${encodeURIComponent(q)}`);
+      const r = await api(`/api/songs/search?q=${encodeURIComponent(q)}&scope=${LIB.scope}`);
       if (seq !== libSearchSeq) return;
-      LIB.hits = new Set(r.match); LIB.similar = r.similar || [];
-    } catch { LIB.hits = null; LIB.similar = []; }
+      LIB.hits = new Set(r.match); LIB.similar = LIB.scope === "lyrics" ? [] : (r.similar || []);
+      LIB.kind = r.kind || {}; LIB.snip = r.snip || {};
+      LIB.rank = new Map(r.match.map((id, i) => [id, i]));
+    } catch { LIB.hits = null; LIB.similar = []; LIB.kind = {}; LIB.snip = {}; LIB.rank = new Map(); }
     renderSongs();
   }, 180);
 }
-$("#lib-q").addEventListener("input", e => { LIB.q = e.target.value.trim().toLowerCase(); libSearch(); });
+$("#lib-q").addEventListener("input", e => {
+  LIB.q = e.target.value.trim().toLowerCase(); libSearch();
+});
 LIB.sort = store.get("libSort", "new");
 $("#lib-sort").value = LIB.sort;
 $("#lib-sort").onchange = e => { LIB.sort = e.target.value; store.set("libSort", LIB.sort); renderSongs(); };
@@ -219,16 +233,18 @@ $("#cat-del").onclick = async () => {
   catch (e) { toast(e.message); }
   loadSongs();
 };
+function inCurCat(s) {
+  if (LIB.cur === "__flag__") return lyrNeedsFix(s);
+  if (LIB.cur === "__none__") return !s.category;
+  return LIB.cur === "__all__" || s.category === LIB.cur;
+}
+// 2.2.1：有輸入搜尋字時找全部分類（目前分類的排前面），不會因為停在別的分類就「找不到」
 function songMatches(s) {
-  if (LIB.cur === "__flag__") { if (!lyrNeedsFix(s)) return false; }
-  else {
-    if (LIB.cur === "__none__" && s.category) return false;
-    if (LIB.cur !== "__all__" && LIB.cur !== "__none__" && s.category !== LIB.cur) return false;
-  }
-  if (!LIB.q) return true;
+  if (!LIB.q) return inCurCat(s);
   if (LIB.hits) return LIB.hits.has(s.id);
-  const hay = [s.title, s.yt_artist, s.yt_track, s.yt_uploader, s.category, s.lyrics_text,
-    s.lyrics_online && s.lyrics_online.artist].filter(Boolean).join(" ").toLowerCase();
+  const lyr = LIB.scope !== "name" ? s.lyrics_text : "";
+  const hay = (LIB.scope === "lyrics" ? [s.lyrics_text] : [s.title, s.artist, s.yt_artist, s.yt_track, s.yt_uploader, s.category, lyr,
+    s.lyrics_online && s.lyrics_online.artist]).filter(Boolean).join(" ").toLowerCase();
   return LIB.q.split(/\s+/).every(w => hay.includes(w));
 }
 /* ------------------------------------------------------------ 直播模式（精簡版面）
@@ -378,6 +394,7 @@ $("#ls-dlg").addEventListener("click", e => { if (e.target.id === "ls-dlg") $("#
 /* 直播模式的操作（畫面按鈕和 Ctrl+Alt 全域快捷鍵共用） */
 function liveAction(act) {
   if (act === "next-song") return queueNext();
+  if (act === "pause-all") return togglePauseAll();
   if (!S.song) return toast("還沒選歌");
   if (act === "play") return S.playing || S.wantPlay ? pause() : play();
   if (act === "now") return liveAdjust("cur");
@@ -475,41 +492,164 @@ function updateCountdown(t) {
   if (el.textContent !== show) { el.textContent = show; el.hidden = !show; if (show) { el.classList.remove("pulse"); void el.offsetWidth; el.classList.add("pulse"); } }
 }
 
-/* 本場歌單：直播模式下播放超過 30 秒就記一筆 */
+/* 直播歌單：不管是不是直播模式，一首歌播放超過 30 秒就記一筆（2.3.0；之前只記直播模式）。
+   距離上一首超過 6 小時就當成新的一場，所以同一段時間裡唱的歌都會在同一場 */
 LIVE.played = 0; LIVE.logged = null; LIVE.lastTick = 0;
 function setlistTick(t) {
   const now = performance.now();
   const dt = LIVE.lastTick ? Math.min(0.5, (now - LIVE.lastTick) / 1000) : 0;
   LIVE.lastTick = now;
-  if (!LIVE.on || !S.playing || !S.song) return;
+  if (!S.playing || !S.song) return;
   if (LIVE.logged === S.song.id) return;
   LIVE.played += dt;
   if (LIVE.played < 30) return;
   LIVE.logged = S.song.id;
-  api("/api/setlist/add", { json: { id: S.song.id, title: S.song.title, artist: S.song.artist || "", key: S.key } }).catch(() => {});
+  api("/api/setlist/add", { json: { id: S.song.id, title: S.song.title, artist: S.song.artist || "", key: S.key, played: LIVE.played } }).catch(() => {});
+}
+/* 2.3.0 直播歌單回顧：本場＋過去場次，可產生 YouTube 章節時間戳、存成文字檔或 Excel */
+const SL = { file: "", data: null };
+const pad2 = n => String(n).padStart(2, "0");
+const hhmm = t => { const d = new Date(t * 1000); return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`; };
+const songStart = x => x.s || (x.t - 30);
+function hms(sec) {
+  sec = Math.max(0, Math.floor(sec));
+  const h = Math.floor(sec / 3600), m = Math.floor(sec / 60) % 60, ss = sec % 60;
+  return h ? `${h}:${pad2(m)}:${pad2(ss)}` : `${pad2(m)}:${pad2(ss)}`;
+}
+function slStart() {   // 開台時間（epoch 秒）：同一天的時:分:秒
+  const v = $("#sl-start").value, it = SL.data && SL.data.items[0];
+  if (!v || !it) return it ? songStart(it) : 0;
+  const [h, m, ss] = v.split(":").map(Number);
+  const d = new Date(songStart(it) * 1000); d.setHours(h, m, ss || 0, 0);
+  let t = d.getTime() / 1000;
+  if (t > songStart(it) + 3600) t -= 86400;   // 跨午夜：開台在前一天
+  return t;
+}
+function slItems() {   // 每首歌一列，可以勾選刪除
+  const box = $("#sl-items"); box.innerHTML = "";
+  const items = (SL.data && SL.data.items) || [];
+  items.forEach((x, i) => {
+    const l = document.createElement("label");
+    l.innerHTML = `<input type="checkbox" data-i="${i}"><span class="num"></span><span></span>`;
+    $(".num", l).textContent = `${i + 1}. ${hhmm(songStart(x))}`;
+    $$("span", l)[1].textContent = `${x.title}${x.artist ? ` － ${x.artist}` : ""}${x.key ? `（KEY ${x.key > 0 ? "+" : ""}${x.key}）` : ""}`;
+    box.append(l);
+  });
+  $("#sl-all").checked = false;
+  $("#sl-del").disabled = $("#sl-drop").disabled = $("#sl-all").disabled = !items.length;
+}
+function slRender() {
+  const r = SL.data, mode = $("#sl-mode").value;
+  $("#sl-start-f").hidden = $("#sl-hint").hidden = mode !== "chapters";
+  if (!r || !r.items.length) { $("#sl-text").value = "這場還沒有唱過的歌。"; return; }
+  const name = x => `${x.title}${x.artist ? ` － ${x.artist}` : ""}`;
+  if (mode === "chapters") {
+    const st = slStart(), lines = ["00:00 開場"];
+    let last = 0;
+    for (const x of r.items) {
+      const off = songStart(x) - st;
+      if (off < 10 || off - last < 10) continue;   // YouTube：第一段 00:00、每段至少 10 秒
+      lines.push(`${hms(off)} ${name(x)}`); last = off;
+    }
+    $("#sl-text").value = lines.join("\n");
+  } else {
+    const d = new Date((r.started || r.items[0].t) * 1000);
+    const head = `${d.getFullYear()}/${pad2(d.getMonth() + 1)}/${pad2(d.getDate())} 歌單`;
+    $("#sl-text").value = [head, ...r.items.map((x, i) => `${i + 1}. ${hhmm(songStart(x))} ${name(x)}${x.key ? `（KEY ${x.key > 0 ? "+" : ""}${x.key}）` : ""}`)].join("\n");
+  }
+}
+async function slLoad(file) {
+  SL.file = file || "";
+  SL.data = await api(`/api/setlist${SL.file ? `?file=${encodeURIComponent(SL.file)}` : ""}`);
+  const it = SL.data.items[0];
+  if (it) { const d = new Date(songStart(it) * 1000); $("#sl-start").value = `${pad2(d.getHours())}:${pad2(d.getMinutes())}:00`; }
+  slItems(); slRender();
 }
 async function openSetlist() {
   try {
-    const r = await api("/api/setlist");
-    const d = r.started ? new Date(r.started * 1000) : new Date();
-    const head = `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")} 歌單`;
-    const lines = r.items.map((x, i) => {
-      const tm = new Date(x.t * 1000);
-      return `${i + 1}. ${String(tm.getHours()).padStart(2, "0")}:${String(tm.getMinutes()).padStart(2, "0")} ${x.title}${x.artist ? ` － ${x.artist}` : ""}${x.key ? `（KEY ${x.key > 0 ? "+" : ""}${x.key}）` : ""}`;
-    });
-    $("#sl-text").value = r.items.length ? [head, ...lines].join("\n") : "這場還沒有唱過的歌。";
+    const hist = await api("/api/setlist/history");
+    const sel = $("#sl-session"); sel.innerHTML = "";
+    if (!hist.some(h => h.current)) hist.unshift({ file: "", started: Date.now() / 1000, count: 0, current: true });
+    for (const h of hist) {
+      const o = document.createElement("option"); o.value = h.file;
+      const d = new Date(h.started * 1000);
+      o.textContent = `${h.current ? "本場" : `${d.getMonth() + 1}/${d.getDate()} ${hhmm(h.started)}`}（${h.count} 首）`;
+      sel.append(o);
+    }
+    sel.value = "";
+    await slLoad("");
     $("#setlist-dlg").hidden = false;
   } catch (e) { toast(e.message); }
 }
 $("#lv-setlist").onclick = openSetlist;
+$("#lib-setlist").onclick = openSetlist;
+$("#sl-session").onchange = e => slLoad(e.target.value).catch(err => toast(err.message));
+$("#sl-mode").onchange = slRender;
+$("#sl-all").onchange = e => $$("#sl-items input").forEach(c => (c.checked = e.target.checked));
+$("#sl-del").onclick = async () => {
+  const idx = $$("#sl-items input:checked").map(c => +c.dataset.i);
+  if (!idx.length) return toast("請先勾選要刪除的歌");
+  if (!confirm(`刪除勾選的 ${idx.length} 首？刪除後無法復原。`)) return;
+  try {
+    const r = await api("/api/setlist/remove", { json: { file: SL.file, idx } });
+    toast(`已刪除 ${idx.length} 首`, 2000);
+    if (!r.left && SL.file) return openSetlist();   // 過去的場次刪光了：整場一起刪掉
+    await slLoad(SL.file);
+  } catch (e) { toast(e.message); }
+};
+$("#sl-drop").onclick = async () => {
+  if (!confirm(SL.file ? "刪除這一場的紀錄？刪除後無法復原。" : "清空本場的紀錄（不保存）？刪除後無法復原。")) return;
+  try { await api("/api/setlist/delete", { json: { file: SL.file } }); toast("已刪除", 2000); LIVE.logged = null; openSetlist(); }
+  catch (e) { toast(e.message); }
+};
+$("#sl-start").oninput = slRender;
 $("#sl-copy").onclick = async () => {
   try { await navigator.clipboard.writeText($("#sl-text").value); toast("已複製", 1500); }
   catch { $("#sl-text").select(); document.execCommand("copy"); toast("已複製", 1500); }
 };
+$("#sl-save").onclick = async () => {
+  try { await api("/api/export/setlist", { json: { file: SL.file, text: $("#sl-text").value, kind: $("#sl-mode").value } }); toast("已存到「下載\\雷虎練唱台」", 3000); }
+  catch (e) { toast(e.message); }
+};
+$("#sl-xlsx").onclick = async () => {
+  try { await api("/api/export/setlist", { json: { file: SL.file, format: "xlsx", start: slStart() } }); toast("已存到「下載\\雷虎練唱台」", 3000); }
+  catch (e) { toast(e.message); }
+};
 $("#sl-new").onclick = async () => {
-  if (!confirm("清空本場歌單，開始新的一場？")) return;
+  if (!confirm("結束這一場，開始新的一場？（這一場會保存起來，之後還能回顧）")) return;
   await api("/api/setlist/clear", { json: {} }).catch(e => toast(e.message));
   LIVE.logged = null; openSetlist();
+};
+
+/* 2.3.0 匯出歌單：網頁（給觀眾看）、Excel、可以再匯回的 CSV */
+const exFmt = () => document.querySelector('input[name="ex-fmt"]:checked').value;
+function exSync() {
+  const f = exFmt();
+  $("#ex-title-f").hidden = f === "csv";
+  $("#ex-key-f").hidden = f === "csv";
+}
+$("#export-open").onclick = () => {
+  const named = LIB.cur === "__all__" ? "全部" : LIB.cur === "__none__" ? "未分類" : LIB.cur === "__flag__" ? "全部" : LIB.cur;
+  $("#ex-cur").textContent = named;
+  document.querySelector('input[name="ex-scope"][value="cur"]').disabled = LIB.cur === "__all__" || LIB.cur === "__flag__";
+  if (LIB.cur === "__all__" || LIB.cur === "__flag__") document.querySelector('input[name="ex-scope"][value="all"]').checked = true;
+  $("#ex-title").value = store.get("exportTitle", "");
+  exSync();
+  $("#export-dlg").hidden = false;
+};
+document.querySelectorAll('input[name="ex-fmt"]').forEach(r => (r.onchange = exSync));
+$("#ex-close").onclick = () => ($("#export-dlg").hidden = true);
+$("#ex-go").onclick = async () => {
+  const scope = document.querySelector('input[name="ex-scope"]:checked').value;
+  const title = $("#ex-title").value.trim();
+  store.set("exportTitle", title);
+  try {
+    const r = await api("/api/export/songlist", { json: {
+      format: exFmt(), category: scope === "cur" ? LIB.cur : "__all__", ready_only: $("#ex-ready").checked,
+      show_key: $("#ex-key").checked, title } });
+    toast(`已匯出 ${r.count} 首，存到「下載\\雷虎練唱台」`, 4000);
+    $("#export-dlg").hidden = true;
+  } catch (e) { toast(e.message); }
 };
 $("#sl-close").onclick = () => { $("#setlist-dlg").hidden = true; };
 $("#setlist-dlg").addEventListener("click", e => { if (e.target.id === "setlist-dlg") $("#sl-close").click(); });
@@ -543,14 +683,42 @@ $("#lib-draw").onclick = () => {
   spin();
 };
 
-function renderLiveSongs(box, list) {
+/* 2.2.1 搜尋結果的排列：歌名歌手符合的（依符合程度；目前分類的排前面）→「歌詞裡有」的 → 歌名相近的。
+   回傳歌曲和 {head: "標題"} 混在一起的陣列；沒有搜尋時依排序方式排列 */
+function libItems(list) {
   const sortBy = LIB.sort || "new";
   const cmp = (a, b) => (a || "").localeCompare(b || "", "zh-Hant");
-  if (sortBy === "title") list.sort((a, b) => cmp(a.title, b.title));
-  if (sortBy === "artist") list.sort((a, b) => (!a.artist - !b.artist) || cmp(a.artist, b.artist) || cmp(a.title, b.title));
-  if (!list.length) { box.innerHTML = `<div class="empty">${LIB.q ? "找不到符合的歌曲。" : "這個分類還沒有歌。"}</div>`; return; }
+  if (!LIB.q) {
+    if (sortBy === "title") list.sort((a, b) => cmp(a.title, b.title));
+    if (sortBy === "artist") list.sort((a, b) => (!a.artist - !b.artist) || cmp(a.artist, b.artist) || cmp(a.title, b.title));
+    return list;
+  }
+  const rk = s => LIB.rank.has(s.id) ? LIB.rank.get(s.id) : 1e9;
+  const byRank = arr => arr.sort((a, b) => (inCurCat(b) - inCurCat(a)) || rk(a) - rk(b));
+  const names = list.filter(s => LIB.kind[s.id] !== "lyrics"), lyr = list.filter(s => LIB.kind[s.id] === "lyrics");
+  const out = [];
+  if (names.length) {
+    const mine = byRank(names.filter(inCurCat)), others = byRank(names.filter(s => !inCurCat(s)));
+    out.push(...mine);
+    if (others.length && LIB.cur !== "__all__") out.push({ head: mine.length ? "其他分類的歌" : "這個分類沒有符合的歌，以下是其他分類找到的：" });
+    out.push(...others);
+  }
+  if (lyr.length) {
+    if (names.length || LIB.scope !== "lyrics") out.push({ head: `歌詞裡有「${LIB.q}」的歌` });
+    out.push(...byRank(lyr));
+  }
+  const sim = LIB.similar.map(id => LIB.songs.find(s => s.id === id)).filter(s => s && !list.includes(s));
+  if (sim.length) out.push({ head: list.length ? "歌名相近的歌" : "找不到完全符合的歌曲，以下是歌名相近的歌：" }, ...sim);
+  return out;
+}
+function libHead(t) { const h = document.createElement("div"); h.className = "sim-head"; h.textContent = t; return h; }
+
+function renderLiveSongs(box, list) {
+  const items = libItems(list);
+  if (!items.length) { box.innerHTML = `<div class="empty">${LIB.q ? "找不到符合的歌曲。" : "這個分類還沒有歌。"}</div>`; return; }
   const frag = document.createDocumentFragment();
-  for (const s of list) {
+  for (const s of items) {
+    if (s.head) { frag.appendChild(libHead(s.head)); continue; }
     const ok = !!(s.steps || {}).pitch;
     const el = document.createElement("button");
     el.className = "live-song" + (S.song && S.song.id === s.id ? " cur" : "");
@@ -558,7 +726,8 @@ function renderLiveSongs(box, list) {
     el.title = ok ? "開始這首" : "還沒處理好";
     el.innerHTML = `<span class="t"></span><span class="a"></span>${ok ? `<span class="add" role="button" title="加進待唱清單">＋</span>` : ""}`;
     $(".t", el).textContent = (lyrNeedsFix(s) ? "⚑ " : "") + s.title;
-    $(".a", el).textContent = [s.artist, s.key ? `KEY ${s.key > 0 ? "+" : ""}${s.key}` : ""].filter(Boolean).join("・");
+    $(".a", el).textContent = LIB.q && LIB.snip[s.id] ? `「${LIB.snip[s.id]}」`
+      : [s.artist, s.key ? `KEY ${s.key > 0 ? "+" : ""}${s.key}` : ""].filter(Boolean).join("・");
     el.onclick = e => {
       if (e.target.classList.contains("add")) { e.stopPropagation(); return queueAdd(s.id); }
       openSong(s.id).then(() => renderSongs());
@@ -582,31 +751,21 @@ function renderSongs() {
     box.scrollTop = keepTop;
     return;
   }
-  const inCat = s => !(LIB.cur === "__none__" && s.category) && (LIB.cur === "__all__" || LIB.cur === "__none__" || s.category === LIB.cur);
-  const sim = LIB.q ? LIB.similar.map(id => LIB.songs.find(s => s.id === id)).filter(s => s && inCat(s) && !list.includes(s)) : [];
-  if (!list.length && !sim.length) {
+  const items = libItems(list);
+  if (!items.length) {
     box.innerHTML = `<div class="empty">${LIB.q ? "找不到符合的歌曲。" : "這個分類還沒有歌。匯入歌曲，或在其他歌的「分類」選單把歌放進來。"}</div>`;
     return;
   }
-  const sortBy = LIB.sort || "new";
-  const cmp = (a, b) => (a || "").localeCompare(b || "", "zh-Hant");
-  if (sortBy === "title") list.sort((a, b) => cmp(a.title, b.title));
-  if (sortBy === "artist") list.sort((a, b) => (!a.artist - !b.artist) || cmp(a.artist, b.artist) || cmp(a.title, b.title));
+  const byArtist = (LIB.sort || "new") === "artist" && !LIB.q;
   let lastArtist = null;
-  for (const s of [...list, ...(sim.length ? ["__sim__", ...sim] : [])]) {
-    if (sortBy === "artist" && s !== "__sim__" && !sim.includes(s) && (s.artist || "") !== lastArtist) {
+  for (const s of items) {
+    if (s.head) { box.appendChild(libHead(s.head)); continue; }
+    if (byArtist && (s.artist || "") !== lastArtist) {
       lastArtist = s.artist || "";
       const h = document.createElement("div");
       h.className = "artist-head";
       h.textContent = lastArtist || "（未填歌手）";
       box.appendChild(h);
-    }
-    if (s === "__sim__") {
-      const h = document.createElement("div");
-      h.className = "sim-head";
-      h.textContent = list.length ? "歌名相近的歌" : "找不到完全符合的歌曲，以下是歌名相近的歌：";
-      box.appendChild(h);
-      continue;
     }
     const el = document.createElement("div");
     el.className = "song";
@@ -636,11 +795,13 @@ function renderSongs() {
     el.innerHTML = `
       <div><div class="t"></div><div class="sub"></div><div class="m">${chips.join("")}</div></div>
       <div class="acts">
+        ${st.pitch ? "" : `<button data-a="prio" title="把這首排到處理佇列最前面，下一首就處理它">優先處理</button>`}
         <button class="primary" data-a="open" ${st.pitch ? "" : "disabled"}>練唱</button>
         <select class="catsel" data-a="cat" aria-label="分類"></select>
         <button data-a="rename">編輯資訊</button>
         <select data-a="redo" aria-label="重新處理">
           <option value="">重新處理…</option>
+          <option value="prio">優先處理（排到佇列最前面）</option>
           <option value="separate,pitch,lyrics">全部重做</option>
           <option value="lyrics">只重新辨識歌詞</option>
           <option value="max">用最高品質人聲分離重新辨識（合音多的歌，較慢）</option>
@@ -659,6 +820,10 @@ function renderSongs() {
     if (s.key) { const k = document.createElement("span"); k.className = "k"; k.textContent = `KEY ${s.key > 0 ? "+" : ""}${s.key}`; sub.append(k); }
     sub.hidden = !s.artist && !s.key;
     $$(".note", el).forEach((n, i) => (n.textContent = s.notes[i]));
+    if (LIB.q && LIB.snip[s.id]) {   // 搜歌詞：顯示符合的那一句
+      const sn = document.createElement("div"); sn.className = "lyr-snip"; sn.textContent = `歌詞：「${LIB.snip[s.id]}」`;
+      $(".sub", el).after(sn);
+    }
     const sel = $('[data-a="cat"]', el);
     sel.innerHTML = `<option value="">未分類</option>` + LIB.cats.map(() => `<option></option>`).join("");
     LIB.cats.forEach((c, i) => { sel.options[i + 1].value = c; sel.options[i + 1].textContent = c; });
@@ -684,6 +849,8 @@ function renderSongs() {
       try { await api(`/api/songs/${s.id}/fine`, { method: "POST", json: {} }); toast("已排入精細處理（排在佇列最後）"); loadSongs(); pollJobs(); }
       catch (e) { toast(e.message); }
     };
+    const pr = $('[data-a="prio"]', el);
+    if (pr) pr.onclick = () => prioritize(s.id);
     const rp = $('[data-a="repitch"]', el);
     if (rp) rp.onclick = () => repitch(s.id);
     $('[data-a="rename"]', el).onclick = () => openEdit(s);
@@ -691,6 +858,7 @@ function renderSongs() {
       const v = e.target.value; e.target.value = "";
       if (!v) return;
       try {
+        if (v === "prio") return prioritize(s.id);
         if (v === "max") await reprocessMax(s.id);
         else if (v === "group" || v === "solo") await setVocalMode(s.id, v === "group");
         else { await api(`/api/songs/${s.id}/process`, { json: { steps: v.split(",") } }); toast("已加入處理佇列"); }
@@ -709,7 +877,7 @@ function renderSongs() {
       if (S.song && S.song.id === s.id) { S.song = null; $("#nav-practice").disabled = true; }
       loadSongs();
     };
-    if (sim.includes(s)) el.classList.add("similar");
+    if (LIB.q && !(LIB.hits ? LIB.hits.has(s.id) : true)) el.classList.add("similar");
     box.appendChild(el);
   }
 }
@@ -933,6 +1101,7 @@ async function pollJobs() {
   let st;
   try { st = await api(`/api/status${window.LIVE && LIVE.on ? "?live=1" : ""}`); } catch { jobTimer = setTimeout(pollJobs, 3000); return; }
   syncLiveHold(st.live);
+  syncPauseBar(st);
   updateAIChip(st.ai_ready, st.session_cost, st.ai_provider);
   remoteOpen(st.remote);
   syncYtPause(st.yt_pause);
@@ -951,19 +1120,29 @@ async function pollJobs() {
       if (j.kind === "take" && S.song && j.song === S.song.id) refreshTakes(j.label);
     }
     jobSeen[j.id] = j.status;
-    if (j.kind !== "process" || j.status === "done" || j.status === "cancelled") continue;
+    if (j.kind === "storage" && j.status !== "running" && jobSeen["_st" + j.id] !== j.status) {   // 搬移結束：通知、更新畫面
+      jobSeen["_st" + j.id] = j.status;
+      if (j.status === "done") { toast("歌曲庫搬移完成，已經改用新的位置", 6000); loadSongs(); if (!$("#settings").hidden) loadStorage(); }
+      if (j.status === "error") toast("搬移失敗：" + (j.error || ""), 8000);
+    }
+    if ((j.kind !== "process" && j.kind !== "storage") || j.status === "done" || j.status === "cancelled") continue;
     if (j.status === "error" && (jobHidden.has(j.id) || (newest[j.song] || 0) > (j.created || 0))) continue;
     const el = document.createElement("div");
     el.className = "job" + (j.status === "error" ? " error" : "");
     el.innerHTML = `<span class="lbl"></span><span class="num">${j.status === "error" ? "" : Math.round(j.progress * 100) + "%"}</span>
       <span class="acts">${j.status === "error" ? `<button class="ghost job-x" title="關閉這則訊息" aria-label="關閉這則訊息">✕</button>`
-        : (j.status === "queued" ? `<button class="ghost job-mv" data-d="-1" title="往前移" aria-label="往前移">▲</button><button class="ghost job-mv" data-d="1" title="往後移" aria-label="往後移">▼</button>` : "")
+        : (j.status === "queued" ? `<button class="ghost job-top" title="移到最前面，下一首就處理" aria-label="移到最前面">⤒</button><button class="ghost job-mv" data-d="-1" title="往前移" aria-label="往前移">▲</button><button class="ghost job-mv" data-d="1" title="往後移" aria-label="往後移">▼</button>` : "")
           + `<button class="ghost job-stop" title="停止處理這首歌；已經完成的步驟會保留">${j.status === "queued" ? "取消" : "停止"}</button>`}</span>
       <div class="meter"><i style="width:${Math.round(j.progress * 100)}%"></i></div>${j.error ? `<div class="err"></div>` : ""}`;
     $$(".job-mv", el).forEach(b => (b.onclick = async () => {
       try { await api(`/api/jobs/${j.id}/move`, { json: { delta: +b.dataset.d } }); } catch (e) { toast(e.message); }
       pollJobs();
     }));
+    const top = $(".job-top", el);
+    if (top) top.onclick = async () => {
+      try { await api(`/api/jobs/${j.id}/top`, { method: "POST", json: {} }); toast("已移到最前面", 2000); } catch (e) { toast(e.message); }
+      pollJobs();
+    };
     const x = $(".job-x", el);
     if (x) x.onclick = () => { jobHidden.add(j.id); el.remove(); };
     const stop = $(".job-stop", el);
@@ -976,7 +1155,7 @@ async function pollJobs() {
         pollJobs();
       };
     }
-    $(".lbl", el).textContent = `${j.status === "queued" && j.order != null ? `#${j.order + 1} ` : ""}${j.label === "compact" ? "整理歌曲檔案" : songTitle(j.song)}：${j.status === "queued" ? "排隊中" : j.step}`;
+    $(".lbl", el).textContent = `${j.status === "queued" && j.order != null ? `#${j.order + 1} ` : ""}${j.label === "compact" ? "整理歌曲檔案" : j.kind === "storage" ? "搬移歌曲庫" : songTitle(j.song)}：${j.status === "queued" ? "排隊中" : j.step}`;
     if (j.error) $(".err", el).textContent = j.error;
     box.appendChild(el);
   }
@@ -1045,6 +1224,36 @@ $("#update-chip").addEventListener("click", async e => {
   try { await api("/api/update/install", { method: "POST", json: {} }); c.textContent = "下載更新 0%…"; pollJobs(); }
   catch (err) { toast(err.message); }
 });
+// 2.1.1 優先處理：排到處理佇列最前面
+const PRIO_MSG = { moved: "已移到佇列最前面", download: "已排到最前面下載並處理", process: "已排到最前面處理",
+  upgrade: "已排到最前面，用高品質模型重新分離" };
+async function prioritize(id) {
+  try {
+    const r = await api(`/api/songs/${id}/prioritize`, { method: "POST", json: {} });
+    toast((PRIO_MSG[r.what] || "已排到最前面") + (pausedNow ? "（目前全部暫停中，按「繼續處理」後開始）" : ""), 3500);
+    loadSongs(); pollJobs();
+  } catch (e) { toast(e.message); }
+}
+let pausedNow = false;
+async function togglePauseAll(on) {
+  try {
+    const r = await api("/api/jobs/pause-all", { json: on === undefined ? {} : { on } });
+    pausedNow = r.paused;
+    toast(r.paused ? "處理已全部暫停（錄音評分、KEY 轉換照常）" : "繼續處理", 3000);
+    pollJobs();
+  } catch (e) { toast(e.message); }
+}
+$("#jobs-pause").onclick = () => togglePauseAll(true);
+$("#jobs-resume").onclick = () => togglePauseAll(false);
+function syncPauseBar(st) {
+  const paused = !!(st.live && st.live.paused);
+  pausedNow = paused;
+  const proc = st.jobs.filter(j => ["process", "playlist"].includes(j.kind) && (j.status === "queued" || j.status === "running"));
+  $("#jobs-paused").hidden = !paused;
+  $("#jobs-bar").hidden = paused || !proc.length;
+  const run = proc.filter(j => j.status === "running").length;
+  $("#jobs-sum").textContent = proc.length ? `處理中 ${run} 首、排隊 ${proc.length - run} 首` : "";
+}
 let liveHoldWas = null;
 function syncLiveHold(l) {
   const on = !!(l && l.hold);
@@ -3580,7 +3789,96 @@ function updateAIMode() {
   $("#cfg-local-model").disabled = automatic;
   if (automatic && aiRecommendation) $("#cfg-local-model").value = aiRecommendation.model;
 }
+/* 2.3.0 儲存位置：歌曲庫、模型可以搬到別的磁碟 */
+const gb = n => n == null ? "?" : n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : `${Math.max(0.1, n / 1e6).toFixed(n >= 1e8 ? 0 : 1)} MB`;
+let STORE = null;
+async function loadStorage() {
+  try {
+    STORE = await api("/api/storage/location");
+    const box = $("#loc-info"); box.innerHTML = "";
+    for (const [k, name] of [["library", "歌曲庫"], ["models", "模型"]]) {
+      const d = document.createElement("div");
+      d.textContent = `${name}：${STORE[k]}（${gb(STORE[k + "_size"])}${STORE[k + "_free"] != null ? `，所在磁碟剩 ${gb(STORE[k + "_free"])}` : ""}）`;
+      box.append(d);
+    }
+    if (STORE.library_missing) { const d = document.createElement("div"); d.className = "warn"; d.textContent = "找不到歌曲庫的資料夾（外接硬碟沒接上？）"; box.append(d); }
+    const old = $("#storage-old"); old.innerHTML = "";
+    for (const p of STORE.old) {
+      const r = document.createElement("div"); r.className = "row";
+      r.innerHTML = `<span class="hint"></span><button type="button" class="ghost danger">刪除舊位置</button>`;
+      $("span", r).textContent = `搬移前的舊位置還留著：${p}`;
+      $("button", r).onclick = async () => {
+        if (!confirm(`確定新位置一切正常了嗎？\n將永久刪除舊位置：\n${p}\n刪除後無法復原。`)) return;
+        try { await api("/api/storage/delete-old", { json: { path: p } }); toast("已刪除舊位置", 2500); loadStorage(); }
+        catch (e) { toast(e.message); }
+      };
+      old.append(r);
+    }
+  } catch (e) { $("#loc-info").textContent = e.message; }
+}
+function stNeed() {
+  if (!STORE) return;
+  const need = ($("#st-lib").checked ? STORE.library_size : 0) + ($("#st-models").checked ? STORE.models_size : 0);
+  const t = $("#st-target").value.trim();
+  const dr = STORE.drives.find(d => t.toUpperCase().startsWith(d.path.toUpperCase()));
+  $("#st-need").textContent = `需要約 ${gb(need)}` + (dr ? `，${dr.path} 剩 ${gb(dr.free)}${dr.free - need < 1e9 ? "（空間不夠）" : ""}` : "");
+}
+$("#st-open").onclick = async () => {
+  await loadStorage();
+  if (!STORE) return;
+  $("#st-lib-l").textContent = `歌曲庫（${gb(STORE.library_size)}）`;
+  $("#st-models-l").textContent = `模型（${gb(STORE.models_size)}，可選；分離、辨識用的 AI 模型）`;
+  const box = $("#st-drives"); box.innerHTML = "";
+  for (const d of STORE.drives) {
+    const b = document.createElement("button"); b.type = "button"; b.className = "ghost";
+    b.textContent = `${d.path}（剩 ${gb(d.free)}）`;
+    b.onclick = () => { $("#st-target").value = `${d.path}雷虎練唱台資料`; stNeed(); };
+    box.append(b);
+  }
+  $("#st-pick").hidden = !(window.pywebview && window.pywebview.api && window.pywebview.api.pick_folder);
+  stNeed();
+  document.body.appendChild($("#storage-dlg"));   // 疊在設定視窗上面
+  $("#storage-dlg").hidden = false;
+};
+$("#st-pick").onclick = async () => {
+  try { const p = await window.pywebview.api.pick_folder($("#st-target").value || ""); if (p) { $("#st-target").value = p; stNeed(); } }
+  catch (e) { toast(String(e)); }
+};
+["st-lib", "st-models"].forEach(id => ($("#" + id).onchange = stNeed));
+$("#st-target").oninput = stNeed;
+$("#st-close").onclick = () => ($("#storage-dlg").hidden = true);
+$("#st-adopt").onclick = async () => {
+  const path = $("#st-target").value.trim();
+  if (!path) return toast("請選擇已經有歌曲庫的資料夾");
+  if (!confirm(`改用這個資料夾裡的歌曲庫（不會複製或刪除任何檔案）：\n${path}\n\n目前的歌曲庫會留在原處。確定嗎？`)) return;
+  try {
+    const r = await api("/api/storage/adopt", { json: { path } });
+    toast(`已改用：${r.library}（${r.songs} 首）`, 5000);
+    $("#storage-dlg").hidden = true; loadSongs(); loadStorage();
+  } catch (e) { toast(e.message); }
+};
+$("#st-go").onclick = async () => {
+  const target = $("#st-target").value.trim();
+  if (!target) return toast("請選擇或輸入新的位置");
+  if (!confirm(`開始搬移到：\n${target}\n\n搬移期間處理佇列會暫停、暫時不能練唱。確定開始？`)) return;
+  try {
+    await api("/api/storage/move", { json: { target, library: $("#st-lib").checked, models: $("#st-models").checked } });
+    $("#storage-dlg").hidden = true; $("#settings").hidden = true;
+    toast("開始搬移，進度在歌曲庫的處理清單", 4000); pollJobs();
+  } catch (e) { toast(e.message); }
+};
+
+/* 2.3.0 設定分頁：一般／聲音輸出／直播／歌詞／處理品質／儲存空間／AI（記住上次看的分頁） */
+function setTab(name) {
+  if (!$(`.set-pane[data-pane="${name}"]`)) name = "general";
+  $$(".set-tabs [data-tab]").forEach(b => { const on = b.dataset.tab === name; b.classList.toggle("cur", on); b.setAttribute("aria-selected", on); });
+  $$(".set-pane").forEach(p => (p.hidden = p.dataset.pane !== name));
+  store.set("setTab", name);
+  const pn = $(`.set-pane[data-pane="${name}"]`); if (pn) pn.scrollTop = 0;   // 視窗固定高度，分頁內容自己捲動
+}
+$$(".set-tabs [data-tab]").forEach(b => (b.onclick = () => setTab(b.dataset.tab)));
 async function openSettings(focusUsage) {
+  setTab(focusUsage === true ? "ai" : store.get("setTab", "general"));
   const [cfg, st] = await Promise.all([api("/api/config"), api("/api/status")]);
   settingsKeys = cfg.has_keys || {};
   $("#cfg-ai-mode").value = cfg.ai_mode;
@@ -3605,6 +3903,7 @@ async function openSettings(focusUsage) {
   $("#cfg-kq").value = cfg.karaoke_quality || "auto";
   $("#cfg-vq").value = cfg.vocal_quality || "auto";
   $("#cfg-pause-live").checked = cfg.pause_while_streaming !== false;
+  $("#cfg-parallel").checked = !!cfg.parallel_separation;
   $("#cfg-kov").value = String(cfg.karaoke_overlap === 4 ? 4 : 2);
   $("#cfg-autofine").checked = cfg.auto_fine !== false;
   $("#cfg-pitch").value = cfg.pitch_model;
@@ -3622,6 +3921,7 @@ async function openSettings(focusUsage) {
     $("#cfg-hardware").textContent = `${aiRecommendation.reason}；建議 ${aiRecommendation.model}`;
     updateAIMode();
   } catch (e) { $("#cfg-hardware").textContent = e.message; }
+  loadStorage();
   renderStorage();
 }
 async function renderStorage() {
@@ -3649,7 +3949,7 @@ async function saveSettings(extra = {}) {
       ollama_auto_model: $("#cfg-auto-model").checked,
       whisper_model: $("#cfg-whisper").value, lyrics_language: $("#cfg-lang").value,
       convert_to_taiwan: $("#cfg-tw").checked, auto_recognize_lyrics: $("#cfg-autorec").checked, global_hotkeys: $("#cfg-hotkeys").checked, font: $("#cfg-font").value, audio_out: $("#cfg-out").value, monitor_out: $("#cfg-mon").value, separation_model: $("#cfg-sep").value.trim(),
-      karaoke_model: $("#cfg-kara").value.trim(), karaoke_quality: $("#cfg-kq").value, vocal_quality: $("#cfg-vq").value, pause_while_streaming: $("#cfg-pause-live").checked, karaoke_overlap: +$("#cfg-kov").value, auto_fine: $("#cfg-autofine").checked, pitch_model: $("#cfg-pitch").value,
+      karaoke_model: $("#cfg-kara").value.trim(), karaoke_quality: $("#cfg-kq").value, vocal_quality: $("#cfg-vq").value, pause_while_streaming: $("#cfg-pause-live").checked, parallel_separation: $("#cfg-parallel").checked, karaoke_overlap: +$("#cfg-kov").value, auto_fine: $("#cfg-autofine").checked, pitch_model: $("#cfg-pitch").value,
       ...extra,
     };
     for (const name of ["openai", "claude", "gemini"]) {

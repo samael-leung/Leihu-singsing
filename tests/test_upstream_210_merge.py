@@ -84,9 +84,9 @@ class Upstream210Tests(unittest.TestCase):
             jobs = P.Jobs(live_safe=True)
         background = jobs.submit('process', self.song.name, Mock(), label='upgrade')
         foreground = jobs.submit('playlist', 'next-song', Mock(), label='playlist:batch')
-        self.assertEqual(jobs._next(True)[0], foreground)
-        self.assertEqual(jobs._next(True), (None, None))
-        self.assertEqual(jobs._next(False)[0], background)
+        self.assertEqual(jobs._next(True, 1)[0], foreground)
+        self.assertEqual(jobs._next(True, 1), (None, None, True))
+        self.assertEqual(jobs._next(False, 1)[0], background)
 
     def test_windows_streaming_detection_calls_tasklist_and_matches_process_names(self):
         result = Mock(stdout='"obs64.exe","1234","Console"\n"Other.exe","4567"')
@@ -97,7 +97,7 @@ class Upstream210Tests(unittest.TestCase):
 
     def test_upgrade_skips_already_upgraded_and_queued_songs(self):
         songs = [dict(id='new', steps={'separate': True}, separation='uvr'),
-                 dict(id='done', steps={'separate': True}, separation='uvr', vocal_model='bs_roformer'),
+                 dict(id='done', steps={'separate': True, 'pitch': True}, separation='uvr', vocal_model='bs_roformer'),
                  dict(id='queued', steps={'separate': True}, separation='uvr')]
         with patch.object(P, 'hqv_ready', return_value=True), \
              patch.object(P, 'vocal_model', return_value=P.HQ_VOCAL), \

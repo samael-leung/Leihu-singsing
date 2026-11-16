@@ -9,6 +9,8 @@ import app as web
 
 class CudaCompatibilityTests(unittest.TestCase):
     def setUp(self):
+        worker = patch.object(P, 'IN_WORKER', True)
+        worker.start(); self.addCleanup(worker.stop)
         self.previous = P._CUDA_OK, P.CUDA_NOTE
         P._CUDA_OK, P.CUDA_NOTE = None, ''
         self.addCleanup(self.restore)

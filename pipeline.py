@@ -34,6 +34,21 @@ ROOT = Path(__file__).resolve().parent
 LIB = ROOT / "library"
 MODELS = ROOT / "models"
 CONFIG_PATH = ROOT / "config.json"
+DEFAULT_LIB, DEFAULT_MODELS = LIB, MODELS
+
+
+def _apply_storage() -> None:
+    """2.3.0：歌曲庫、模型可以搬到別的位置（設定裡的 library_dir／models_dir；空的＝程式資料夾裡）。"""
+    global LIB, MODELS
+    try:
+        c = json.loads(CONFIG_PATH.read_text("utf-8"))
+    except Exception:
+        c = {}
+    LIB = Path(c["library_dir"]) if c.get("library_dir") else DEFAULT_LIB
+    MODELS = Path(c["models_dir"]) if c.get("models_dir") else DEFAULT_MODELS
+
+
+_apply_storage()
 
 SR = 44100
 PITCH_SR = 16000
@@ -45,6 +60,8 @@ DEFAULT_CONFIG = {
     "separation_model": "UVR-MDX-NET-Inst_HQ_3.onnx",
     "vocal_quality": "auto",   # 人聲／伴奏分離：auto：有顯示卡用高品質（BS-Roformer，乾淨很多但慢一倍）；standard；high
     "pause_while_streaming": True,   # 偵測到直播軟體（OBS、VTube Studio…）或直播模式開著時，暫停背景的分離、辨識
+    "parallel_separation": False,
+    "queue_paused": False,   # 2.1.1：使用者按了「全部暫停」（重開程式後仍維持暫停）   # 2.1.1：沒在直播時兩首同時分離（顯示卡記憶體 10 GB 以上建議）
     "streaming_apps": ["obs64.exe", "obs32.exe", "VTube Studio.exe", "Streamlabs OBS.exe", "XSplit.Core.exe", "vMix64.exe"],
     "karaoke_model": "UVR_MDXNET_KARA_2.onnx",
     "karaoke_quality": "auto",   # auto：有顯示卡用高品質（Roformer）；standard；high
@@ -122,16 +139,69 @@ def module_status() -> dict:
         "opencc": has("opencc"),
         "ai_client": True,
         "kana": has("sudachipy") and has("sudachidict_small"),
-        "cuda": _cuda(),
+        "cuda": cuda_ok() if IN_WORKER else (gpu_info(block=False) or {}).get("ok", False),
     }
 
 
 _CUDA_OK = None
 CUDA_NOTE = ""
+IN_WORKER = False   # True：這裡是顯示卡子程式（gpu_worker.py），可以載入 PyTorch／CUDA
+_GPU_INFO: dict | None = None
+_GPU_INFO_LOCK = threading.Lock()
+_GPU_PROBING = {"on": False}
 
 
-def _cuda() -> bool:
-    return cuda_ok()
+def _torch_version() -> str:
+    try:
+        from importlib.metadata import version
+        return version("torch")
+    except Exception:
+        return ""
+
+
+def gpu_info(block: bool = True) -> dict | None:
+    """顯示卡能不能用（主程式不載入 CUDA，所以由子程式檢查一次，結果存在 models/gpu_probe.json；
+    換了 PyTorch 版本才重新檢查）。block=False：還不知道時回傳 None，並在背景開始檢查。"""
+    global _GPU_INFO, CUDA_NOTE
+    if _GPU_INFO is not None:
+        return _GPU_INFO
+    tv = _torch_version()
+    if not tv:
+        _GPU_INFO = {"ok": False, "note": "", "cc": None, "torch": ""}
+        return _GPU_INFO
+    cache = MODELS / "gpu_probe.json"
+    try:
+        c = json.loads(cache.read_text("utf-8"))
+        if c.get("torch") == tv:
+            _GPU_INFO = c
+            CUDA_NOTE = c.get("note") or ""
+            return c
+    except Exception:
+        pass
+    if not block:
+        with _GPU_INFO_LOCK:
+            if not _GPU_PROBING["on"]:
+                _GPU_PROBING["on"] = True
+                threading.Thread(target=gpu_info, daemon=True, name="gpu-probe").start()
+        return None
+    with _GPU_INFO_LOCK:
+        if _GPU_INFO is not None:
+            return _GPU_INFO
+        import gpu_worker as G
+        try:
+            info = G.POOL.call("probe")
+        except Exception as e:
+            log_error("gpu probe", e)
+            info = {"ok": False, "note": "", "cc": None}
+        info["torch"] = tv
+        try:
+            MODELS.mkdir(parents=True, exist_ok=True)
+            atomic_write_text(cache, json.dumps(info, ensure_ascii=False))
+        except Exception:
+            pass
+        CUDA_NOTE = info.get("note") or ""
+        _GPU_INFO = info
+        return info
 
 
 def cuda_ok() -> bool:
@@ -141,6 +211,8 @@ def cuda_ok() -> bool:
     （例如 GTX 10 系列配上 CUDA 12.8 版），實際運算時才會出現「no kernel image is available」。
     所以實際跑一個小運算確認，失敗就改用 CPU。結果只算一次。"""
     global _CUDA_OK, CUDA_NOTE
+    if not IN_WORKER:   # 主程式不載入 CUDA：問顯示卡子程式（結果會存起來）
+        return bool((gpu_info() or {}).get("ok"))
     if _CUDA_OK is not None:
         return _CUDA_OK
     try:
@@ -320,6 +392,26 @@ def _song_entry(d: Path) -> dict | None:
     return dict(m)
 
 
+def usage_score(m: dict, setlist_ids: set | None = None) -> float:
+    """這首歌常不常唱（2.1.1）：大量重新處理時，常唱的排前面。
+    看最近開過／直播唱過的時間、直播唱過幾次、錄音幾次、有沒有自己整理過歌詞或分類。"""
+    now = time.time()
+    score = 0.0
+    t = max(m.get("last_opened") or 0, m.get("last_sung") or 0)
+    if t:
+        score += 1000 + max(0.0, 180 - (now - t) / 86400)   # 最近半年內開過，越近越前面
+    if setlist_ids and m.get("id") in setlist_ids:
+        score += 500
+    score += 20 * (m.get("sung") or 0) + 10 * min(20, m.get("takes") or 0)
+    if m.get("key"):
+        score += 30   # 設過自己的 KEY：一定是會唱的歌
+    if m.get("lyrics_source") in ("online", "import", "claude"):
+        score += 5
+    if m.get("category"):
+        score += 2
+    return score
+
+
 def list_songs() -> list[dict]:
     LIB.mkdir(exist_ok=True)
     out = []
@@ -372,20 +464,75 @@ def _bigrams(s: str) -> set:
     return {s[i:i + 2] for i in range(len(s) - 1)} or ({s} if s else set())
 
 
-def search_songs(q: str) -> dict:
-    """回傳完全符合的歌曲（每個關鍵字都要出現，繁簡互通），以及歌名相近的推薦。"""
+def _skey(*parts) -> str:
+    hay = " ".join(str(x) for x in parts if x)
+    k = _SKEY_CACHE.get(hay)
+    if k is None:
+        k = _SKEY_CACHE[hay] = search_key(hay)
+        if len(_SKEY_CACHE) > 5000:
+            _SKEY_CACHE.clear()
+    return k
+
+
+def _lyric_snip(text: str, words: list[str]) -> str:
+    """歌詞裡符合的那一句（給搜尋結果顯示）。"""
+    if not text:
+        return ""
+    norm = search_key(text)
+    pos = norm.find(words[0]) if words else -1
+    if pos < 0:
+        return ""
+    src = text if len(text) == len(norm) else norm   # 繁簡轉換長度不同時，退回顯示轉換後的文字
+    a = src.rfind(" ", 0, pos) + 1
+    b = src.find(" ", pos + len(words[0]))
+    b = len(src) if b < 0 else b
+    a, b = max(a, pos - 14), min(b, pos + len(words[0]) + 14)
+    return ("…" if a > 0 else "") + src[a:b].strip() + ("…" if b < len(src) else "")
+
+
+def search_songs(q: str, scope: str = "all") -> dict:
+    """回傳符合的歌曲（每個關鍵字都要出現，繁簡互通），依符合的地方排序：
+    歌名 → 歌手 → 歌名＋歌手 → 其他資訊 → 只有歌詞裡有（另外附上符合的那句歌詞），以及歌名相近的推薦。
+    scope：name＝只找歌名、歌手；lyrics＝只找歌詞；all＝都找（歌詞符合的排最後）。"""
     from difflib import SequenceMatcher
     nq = search_key(q).strip()
     if not nq:
-        return {"match": [], "similar": []}
+        return {"match": [], "similar": [], "kind": {}, "snip": {}}
     words = nq.split()
     squash = lambda s: re.sub(r"[\W_]+", "", s)
     qq = squash(nq)
-    match, sim = [], []
-    for m in list_songs():
-        key = _song_search_key(m)
-        if all(w in key for w in words):
-            match.append(m["id"])
+
+    def has(key: str) -> bool:
+        # 也比對去掉空白、標點後的版本（「牛仔很忙cowboy」找得到「牛仔很忙 Cowboy on the Run」）
+        return all(w in key for w in words) or (len(qq) >= 2 and qq in squash(key))
+    ranked, sim, kind, snip = [], [], {}, {}
+    for n, m in enumerate(list_songs()):
+        lo = m.get("lyrics_online") if isinstance(m.get("lyrics_online"), dict) else {}
+        tkey = _skey(m.get("title"), m.get("yt_track"))
+        akey = _skey(m.get("artist"), m.get("yt_artist"), lo.get("artist"), m.get("yt_uploader"))
+        r = None
+        if scope == "lyrics":
+            lyr = _skey(m.get("lyrics_text"))
+            if has(lyr):
+                ranked.append((5, n, m["id"]))
+                kind[m["id"]] = "lyrics"
+                snip[m["id"]] = _lyric_snip(m.get("lyrics_text") or "", words)
+            continue
+        if has(tkey):
+            r = 0 if squash(tkey) == qq else 1
+        elif has(akey):
+            r = 2
+        elif has(tkey + " " + akey):
+            r = 3
+        elif has(_skey(m.get("title"), m.get("yt_track"), m.get("artist"), m.get("yt_artist"), lo.get("artist"),
+                       m.get("yt_uploader"), m.get("yt_title"), m.get("category"))):
+            r = 4
+        elif scope != "name" and has(_song_search_key(m)):
+            r = 5
+            kind[m["id"]] = "lyrics"
+            snip[m["id"]] = _lyric_snip(m.get("lyrics_text") or "", words)
+        if r is not None:
+            ranked.append((r, n, m["id"]))
             continue
         if len(qq) < 2:
             continue
@@ -399,8 +546,9 @@ def search_songs(q: str) -> dict:
             best = max(best, ratio, cover * 0.9)
         if best >= 0.45:
             sim.append((best, m["id"]))
+    ranked.sort()
     sim.sort(reverse=True)
-    return {"match": match, "similar": [i for _, i in sim[:6]]}
+    return {"match": [i for _, _, i in ranked], "similar": [i for _, i in sim[:6]], "kind": kind, "snip": snip}
 
 
 def _blank_song(title: str, **extra) -> str:
@@ -925,6 +1073,9 @@ def youtube_job(song_id: str, url: str, after=None):
                     set_dl_state(d, None)
                 else:
                     step_youtube(d, url, report)
+        except JobDeferred:
+            set_dl_state(d, "queued")   # 暫停：之後會重新下載，不算取消
+            raise
         except JobCancelled:
             set_dl_state(d, "cancelled")
             raise
@@ -1288,8 +1439,9 @@ MODEL_FILES = {   # 檔名 → (大小, SHA-256, 下載網址…)
     HQ_KARAOKE: (913096801, "1de20d459332fe8869aeb01327a31df0032262706e1365114e852dc271779813", [
         _HF_UVR + "Roformer/MelBand/" + HQ_KARAOKE, _GH_UVR + HQ_KARAOKE, _GH_AS + HQ_KARAOKE]),
     _HQ_YAML: (None, None, [_GH_AS + _HQ_YAML]),
+    # 2.1.1：Hugging Face 的資料夾是 BandSplit（2.1.0 寫成 BSRoformer → 404）；再多一個 GitHub 來源
     HQ_VOCAL: (639331213, "5b84f37e8d444c8cb30c79d77f613a41c05868ff9c9ac6c7049c00aefae115aa", [
-        _GH_UVR + HQ_VOCAL, _HF_UVR + "Roformer/BSRoformer/" + HQ_VOCAL]),
+        _HF_UVR + "Roformer/BandSplit/" + HQ_VOCAL, _GH_UVR + HQ_VOCAL, _GH_AS + HQ_VOCAL]),
     _HQ_VOCAL_YAML: (2273, "2bfdd16c656bd9519aba757cc4f8834b7ede675eb1e00ec4772d74ae1c41af7f", [
         _GH_AS + _HQ_VOCAL_YAML, _RAW_CFG + _HQ_VOCAL_YAML]),
 }
@@ -1393,9 +1545,25 @@ def fetch_file(urls: list[str], dst: Path, size: int | None = None, sha256: str 
     stop = threading.Event()
     errors: list[Exception] = []
     pref = [0]                             # 目前最好用的來源，其他段落也跟著用
+    dead: set[str] = set()                 # 確定沒有這個檔案的來源（404 等）：之後所有段落都不再用
+    lock = threading.Lock()
 
     def have(k: int) -> int:
         return parts[k].stat().st_size if parts[k].exists() else 0
+
+    def alive() -> list[int]:
+        with lock:
+            return [i for i, u in enumerate(urls) if u not in dead]
+
+    def next_src(ui: int) -> int:
+        """從 ui 的下一個開始，找一個還能用的來源。"""
+        ok = alive()
+        if not ok:
+            return ui
+        for step in range(1, len(urls) + 1):
+            if (ui + step) % len(urls) in ok:
+                return (ui + step) % len(urls)
+        return ui
 
     def worker(k: int) -> None:
         a, b = ranges[k]
@@ -1407,7 +1575,10 @@ def fetch_file(urls: list[str], dst: Path, size: int | None = None, sha256: str 
                     with open(parts[k], "r+b") as f:
                         f.truncate(b - a)
                 return
+            if urls[ui % len(urls)] in dead:
+                ui = next_src(ui)
             url = urls[ui % len(urls)]
+            wrote = 0
             try:
                 with _open(url, a + got, b) as r:
                     if r.status != 206:
@@ -1420,20 +1591,33 @@ def fetch_file(urls: list[str], dst: Path, size: int | None = None, sha256: str 
                                 break
                             f.write(chunk)
                             n0 += len(chunk)
-                            if time.time() - w0 > 30:   # 這個來源慢到不行（每段 < 30 KB/s）：換下一個
-                                if n0 < 30e3 * 30 and len(urls) > 1:
+                            wrote += len(chunk)
+                            if time.time() - w0 > 30:   # 這個來源慢到不行（每段 < 30 KB/s）：有別的來源就換
+                                if n0 < 30e3 * 30 and len(alive()) > 1:
                                     raise _SlowSource()
                                 w0, n0 = time.time(), 0
                 fails = 0
             except _SlowSource:
-                ui += 1                    # 太慢：換來源，不算失敗
-                pref[0] = ui % len(urls)
+                ui = next_src(ui)          # 太慢：換來源，不算失敗
+                pref[0] = ui
             except Exception as e:
-                fails += 1
-                ui += 1                    # 換下一個來源
-                pref[0] = ui % len(urls)
+                code = getattr(e, "code", None)
+                if code in (403, 404, 410):   # 這個來源沒有這個檔案：永久剔除，不要來回切換
+                    with lock:
+                        dead.add(url)
+                    log_error(f"download {dst.name}：來源沒有這個檔案（HTTP {code}），不再使用 {url}", e)
+                    if not alive():
+                        errors.append(IOError(f"所有下載來源都找不到 {dst.name}"))
+                        stop.set()
+                        return
+                    ui = next_src(ui)
+                    pref[0] = ui
+                    continue
+                fails = 0 if wrote else fails + 1   # 有下載到東西（例如中途斷線）不算連續失敗
+                ui = next_src(ui)          # 換下一個來源
+                pref[0] = ui
                 log_error(f"download {dst.name}[{k}] {url}", e)
-                if fails >= 3 * len(urls):
+                if fails >= 3 * max(1, len(alive())):
                     errors.append(e)
                     stop.set()
                     return
@@ -1485,6 +1669,9 @@ def ensure_model_data() -> None:
             log_error(f"model data {name}", e)   # 讓 audio-separator 自己再試一次
 
 
+_model_locks: dict = {}
+
+
 def ensure_model(name: str, progress=None) -> None:
     """確認分離模型已經完整下載；沒有或不完整就從最快的來源下載。"""
     ensure_model_data()
@@ -1493,9 +1680,10 @@ def ensure_model(name: str, progress=None) -> None:
         return                             # 不認得的模型：交給 audio-separator 自己下載
     size, sha, urls = spec
     p = MODELS / "uvr" / name
-    if p.exists() and (not size or p.stat().st_size == size):
-        return
-    fetch_file(urls, p, size, sha, progress)
+    with _model_locks.setdefault(name, threading.Lock()):   # 兩首同時處理時不要重複下載同一個模型
+        if p.exists() and (not size or p.stat().st_size == size):
+            return
+        fetch_file(urls, p, size, sha, progress)
 
 
 def start_hq_download() -> None:
@@ -1604,6 +1792,7 @@ def fine_job(song_id: str, after=None):
         lrc = (d / "lyrics.lrc").exists()
         fit_before = lyrics_timing_fit(d) if lrc else None
         step_separate(d, cfg, report)
+        getattr(report, "gpu_done", lambda: None)()
         step_pitch(d, cfg, report)
         update_meta(d, fine_suggest=False, fine_done=True, fine_queued=False,
                     **({"live_light": False} if full else {}))
@@ -1625,11 +1814,39 @@ def _autocast_ok() -> bool:
     GTX 10 系列以前的顯示卡半精度反而比較慢，維持原本的方式。"""
     if _AUTOCAST["bad"] or not cuda_ok():
         return False
+    if not IN_WORKER:
+        return ((gpu_info() or {}).get("cc") or 0) >= 7
     try:
         import torch
         return torch.cuda.get_device_capability(0)[0] >= 7
     except Exception:
         return False
+
+
+_PROG_TLS = threading.local()   # 每個執行緒目前的分離進度（2.1.1：兩首同時分離時各回報各的）
+_PROG_PATCHED = {"done": False}
+_prog_lock = threading.Lock()
+
+
+def _patch_tqdm() -> None:
+    """把 audio-separator 內部的 tqdm 換成會依執行緒回報進度的版本（只換一次，之後不再還原）。"""
+    with _prog_lock:
+        if _PROG_PATCHED["done"]:
+            return
+        import importlib
+
+        def tq(it=None, *a, **k):
+            cur = getattr(_PROG_TLS, "cur", None)
+            if cur is None or it is None:
+                return it if it is not None else iter(())
+            return cur.wrap(it)
+        for name in _sep_progress.MODS:
+            try:
+                m = importlib.import_module("audio_separator.separator.architectures." + name)
+                m.tqdm = tq
+            except Exception:
+                pass
+        _PROG_PATCHED["done"] = True
 
 
 class _sep_progress:
@@ -1638,7 +1855,7 @@ class _sep_progress:
     MODS = ("mdx_separator", "mdxc_separator", "vr_separator")
 
     def __init__(self, label: str, report, start: float, span: float):
-        self.saved, self.best, self.t0 = [], 0.0, time.time()
+        self.best, self.t0 = 0.0, time.time()
         self.cb = lambda p, eta: report(f"{label} {p * 100:.0f}%{eta}", start + span * p)
 
     def eta(self, p: float) -> str:
@@ -1648,36 +1865,30 @@ class _sep_progress:
         left = el * (1 - p) / p
         return f"（約剩 {left / 60:.0f} 分鐘）" if left >= 90 else f"（約剩 {max(5, round(left / 5) * 5):.0f} 秒）"
 
+    def wrap(self, it):
+        try:
+            n = len(it)
+        except Exception:
+            n = 0
+
+        def gen():
+            for i, x in enumerate(it):
+                if n:
+                    p = i / n
+                    if p >= self.best:
+                        self.best = p
+                        self.cb(p, self.eta(p))
+                yield x
+        return gen()
+
     def __enter__(self):
-        import importlib
-
-        def tq(it=None, *a, **k):
-            try:
-                n = len(it)
-            except Exception:
-                n = 0
-
-            def gen():
-                for i, x in enumerate(it):
-                    if n:
-                        p = i / n
-                        if p >= self.best:
-                            self.best = p
-                            self.cb(p, self.eta(p))
-                    yield x
-            return gen()
-        for name in self.MODS:
-            try:
-                m = importlib.import_module("audio_separator.separator.architectures." + name)
-                self.saved.append((m, m.tqdm))
-                m.tqdm = tq
-            except Exception:
-                pass
+        _patch_tqdm()
+        self.prev = getattr(_PROG_TLS, "cur", None)
+        _PROG_TLS.cur = self
         return self
 
     def __exit__(self, *exc):
-        for m, orig in self.saved:
-            m.tqdm = orig
+        _PROG_TLS.cur = self.prev
         return False
 
 
@@ -1691,23 +1902,21 @@ def _dl_report(report, label: str, frac: float):
     return cb
 
 
-def separate_uvr(d: Path, cfg: dict, report) -> None:
-    try:
-        import torch  # noqa: F401  先載入 PyTorch 的 CUDA 函式庫，ONNX 會沿用同一份
-    except Exception:
-        pass
-    from audio_separator.separator import Separator
+def _separate(model: str, inp: Path, tmp: Path, overlap: int, autocast: bool,
+              label: str, report, start: float, span: float) -> list[Path]:
+    """用一個分離模型分一次（2.1.1：在顯示卡子程式裡跑，主程式不載入 CUDA）。"""
+    import gpu_worker as G
+    outs = G.call("separate", model, str(inp), str(tmp), overlap, autocast, label, start, span, progress=report)
+    return [Path(p) for p in outs]
 
+
+def separate_uvr(d: Path, cfg: dict, report) -> None:
     tmp = d / "_sep"
     shutil.rmtree(tmp, ignore_errors=True)
     tmp.mkdir()
     (MODELS / "uvr").mkdir(parents=True, exist_ok=True)
     overlap = 4 if cfg.get("karaoke_overlap") == 4 else 2
-    sep = Separator(output_dir=str(tmp), model_file_dir=str(MODELS / "uvr"),
-                    output_format="WAV", sample_rate=SR, use_autocast=_autocast_ok(),
-                    # 高品質模型（Roformer）每一段音訊預設重複算 4 次再平均；2 次的結果幾乎一樣，時間約省一半
-                    mdxc_params={"segment_size": 256, "override_model_segment_size": False, "batch_size": None,
-                                 "overlap": overlap, "pitch_shift": 0})
+    autocast = _autocast_ok()
 
     report("準備人聲分離模型", 0.07)
     vmodel = vocal_model(cfg)
@@ -1715,9 +1924,7 @@ def separate_uvr(d: Path, cfg: dict, report) -> None:
     ensure_model(vmodel, _dl_report(report, "人聲分離模型", 0.07))
     vlabel = "分離人聲與伴奏" + ("（高品質）" if vhq else "（高品質模型下載中，這首先用標準模型）" if HQV_DL["state"] == "downloading" else "")
     report(vlabel, 0.08)
-    sep.load_model(model_filename=vmodel)
-    with _sep_progress(vlabel, report, 0.08, 0.26):
-        outs = _outputs(sep.separate(str(stem_path(d, "mix"))), tmp)
+    outs = _separate(vmodel, stem_path(d, "mix"), tmp, overlap, autocast, vlabel, report, 0.08, 0.26)
     update_meta(d, vocal_model="bs_roformer" if vhq else "mdx")   # 之後可以找出還沒用新模型處理的歌
     voc = tmp / "vocals_only.wav"
     _pick(outs, "vocals").replace(voc)
@@ -1731,27 +1938,21 @@ def separate_uvr(d: Path, cfg: dict, report) -> None:
         ensure_model(kara, _dl_report(report, "主唱分離模型", 0.35))
     report(label, 0.35)
 
-    def run_kara(label):
-        with _sep_progress(label, report, 0.35, 0.18):
-            return [p for p in _outputs(sep.separate(str(voc)), tmp) if p != voc and p != inst_p]
+    def run_kara(kara, label, ac):
+        outs = _separate(kara, voc, tmp, overlap, ac, label, report, 0.35, 0.18)
+        return [p for p in outs if p != voc and p != inst_p]
     try:
         try:
-            sep.load_model(model_filename=kara)
-            outs2 = run_kara(label)
+            outs2 = run_kara(kara, label, autocast)
         except JobCancelled:
             raise
         except Exception as e:
-            if not (hq and sep.use_autocast):
+            if not (hq and autocast) or "out of memory" in str(e).lower():
                 raise
             # 混合精度在這張顯示卡上出問題：之後都改用一般精度，這首重新分一次
             _AUTOCAST["bad"] = True
             log_error("autocast separation", e)
-            sep = Separator(output_dir=str(tmp), model_file_dir=str(MODELS / "uvr"),
-                            output_format="WAV", sample_rate=SR, use_autocast=False,
-                            mdxc_params={"segment_size": 256, "override_model_segment_size": False,
-                                         "batch_size": None, "overlap": overlap, "pitch_shift": 0})
-            sep.load_model(model_filename=kara)
-            outs2 = run_kara(label)
+            outs2 = run_kara(kara, label, False)
     except JobCancelled:
         raise
     except Exception as e:
@@ -1762,8 +1963,7 @@ def separate_uvr(d: Path, cfg: dict, report) -> None:
         kara = cfg["karaoke_model"]
         report("把人聲分成主唱與合音（標準）", 0.35)
         ensure_model(kara, _dl_report(report, "主唱分離模型", 0.35))
-        sep.load_model(model_filename=kara)
-        outs2 = run_kara("把人聲分成主唱與合音（標準）")
+        outs2 = run_kara(kara, "把人聲分成主唱與合音（標準）", autocast)
     with _META_LOCK:   # 讀出到寫回之間不讓別的執行緒改這首歌的資料
         meta = read_meta(d)
         meta["karaoke"] = kara
@@ -1775,8 +1975,6 @@ def separate_uvr(d: Path, cfg: dict, report) -> None:
     for name, p in (("lead", lead_p), ("back", back_p), ("inst", inst_p)):
         save_stem(d, name, fit_length(read_audio(p), n))
     shutil.rmtree(tmp, ignore_errors=True)
-    del sep
-    free_gpu()
     # 合音比重：合音越多，主唱和合音越難分乾淨，更精細的分離越有幫助
     try:
         h = harmony_ratio(d)
@@ -1863,6 +2061,16 @@ def step_separate(d: Path, cfg: dict, report) -> None:
 # ---------------------------------------------------------------- 音高
 
 def track_pitch(y16: np.ndarray, cfg: dict | None = None, strict: bool = False) -> np.ndarray:
+    """16 kHz 單聲道 → 每 10 ms 一個 MIDI 音高（無聲為 NaN）。
+    2.1.1：用 torchcrepe（顯示卡）時在子程式裡跑，主程式不載入 CUDA。"""
+    cfg = cfg or load_config()
+    if not IN_WORKER and module_status()["crepe"]:
+        import gpu_worker as G
+        return G.call("pitch", np.ascontiguousarray(y16, dtype=np.float32), cfg, strict)
+    return _track_pitch_local(y16, cfg, strict)
+
+
+def _track_pitch_local(y16: np.ndarray, cfg: dict | None = None, strict: bool = False) -> np.ndarray:
     """16 kHz 單聲道 → 每 10 ms 一個 MIDI 音高（無聲為 NaN）。
 
     strict=True 用於麥克風錄音：門檻較嚴、依背景噪音決定靜音門檻，並去掉每個音頭尾的滑落／滑入
@@ -2151,10 +2359,14 @@ def analysis_vocal(d: Path) -> np.ndarray:
     return lead
 
 
+_PITCH_LOCK = threading.Lock()
+
+
 def step_pitch(d: Path, cfg: dict, report) -> None:
     report("分析主唱旋律" if read_meta(d).get("vocal_mode") != "all" else "分析旋律（合唱模式：主唱＋合音）", 0.55)
     y16 = analysis_vocal(d)
-    midi = track_pitch(y16, cfg)
+    with _PITCH_LOCK:   # 重疊處理時一次只分析一首的旋律（模型共用、也比較省顯示卡記憶體）
+        midi = track_pitch(y16, cfg)
     notes = segment_notes(midi)
     data = {
         "hop": HOP_S,
@@ -2373,33 +2585,20 @@ def lyric_quality(stats: list, words: list, d: Path, lines: list) -> dict:
 def step_lyrics(d: Path, cfg: dict, report) -> None:
     if not module_status()["whisper"]:
         raise UserError("沒有安裝 faster-whisper，無法辨識歌詞")
+    from types import SimpleNamespace
+    import gpu_worker as G
     report("載入語音辨識模型（第一次會下載）", 0.7)
-    free_gpu()
-    model = _whisper_model(cfg)
     y16 = analysis_vocal(d)
-    report("判斷歌詞語言", 0.74)
     meta0 = read_meta(d)
     song_lang = meta0.get("lyrics_language")          # 這首歌個別指定的語言（None＝依設定）
     want = song_lang if song_lang is not None else (cfg.get("lyrics_language") or "")
-    lang, lang_note = pick_language(model, y16, want, song_lang is not None)
-    report("辨識歌詞", 0.75)
-    stats: list = []
-    try:
-        segs, info = model.transcribe(
-            y16, language=lang, vad_filter=True,
-            vad_parameters={"min_silence_duration_ms": 500},
-            word_timestamps=True, condition_on_previous_text=False, beam_size=5)
-        words = _collect_words(segs, len(y16) / PITCH_SR, report, stats)
-    except RuntimeError:
-        # 例如有顯示卡但缺 CUDA 函式庫：改用 CPU 重跑
-        traceback.print_exc()
-        from faster_whisper import WhisperModel
-        model = WhisperModel(cfg.get("whisper_model") or "large-v3-turbo", device="cpu",
-                             compute_type="int8", download_root=str(MODELS / "whisper"))
-        segs, info = model.transcribe(y16, language=lang, vad_filter=True,
-                                      word_timestamps=True, condition_on_previous_text=False)
-        stats = []
-        words = _collect_words(segs, len(y16) / PITCH_SR, report, stats)
+    # 2.1.1：載入模型、判斷語言、辨識都在顯示卡子程式裡跑（CTranslate2 的顯示卡記憶體才放得乾淨）
+    r = G.call("whisper", np.ascontiguousarray(y16, dtype=np.float32), cfg, want, song_lang is not None,
+               progress=report)
+    words = [SimpleNamespace(**w) for w in r["words"]]
+    stats = r["stats"]
+    lang, lang_note = r["lang"], r["lang_note"]
+    info = SimpleNamespace(language=r["language"])
 
     lines, cur = [], []
 
@@ -2543,6 +2742,11 @@ def step_variant(d: Path, key: int, speed: float, report) -> None:
         return
     label = f"移調 {key:+d}、速度 {int(speed * 100)}%"
     cpus = max(1, os.cpu_count() or 1)
+    try:
+        if live_status()["hold"]:   # 2.1.1 直播中：只用一半的 CPU 核心，留給直播軟體和 VTube Studio
+            cpus = max(1, cpus // 2)
+    except Exception:
+        pass
     report(f"{label}：讀取音軌", 0.02)
     data = {}
     for stem in todo:
@@ -2926,7 +3130,7 @@ def live_status(cfg: dict | None = None) -> dict:
 LIVE_BACKGROUND = {"upgrade", "fine", "compact", "max"}
 
 
-class JobDeferred(Exception):
+class JobDeferred(JobCancelled):
     """背景工作做到一半開播：放回佇列，直播結束後從頭再做（不佔著佇列擋住直播中的匯入）。"""
 
 
@@ -2953,34 +3157,97 @@ def live_light_cfg(cfg: dict) -> dict | None:
     return {"vocal_quality": "standard", "karaoke_quality": "standard", "auto_recognize_lyrics": False}
 
 
-class Jobs:
-    """一次只跑一個重工作，避免記憶體爆掉。"""
+# 2.1.1：可以和下一首重疊處理的工作（分離完、還在分析旋律時，下一首就先開始分離）
+PIPELINE_LABELS = {"all", "youtube", "upgrade", "fine", "max"}
 
-    def __init__(self, live_safe: bool = False):
+
+class Jobs:
+    """重工作的佇列。預設一次分離一首；分離完的那首在分析旋律、存檔時，下一首可以先開始分離（pipeline）。
+    設定開啟「閒置時兩首同時分離」且沒在直播時，最多兩首同時分離。"""
+
+    def __init__(self, live_safe: bool = False, pipeline: bool = False):
         self.pending: list[tuple[str, object]] = []   # 排隊中的工作（可以調整順序）
         self.state: dict[str, dict] = {}
         self.lock = threading.Lock()
         self.cv = threading.Condition(self.lock)
         self.live_safe = live_safe   # 直播中要不要暫停（只有重工作的佇列開）
+        self.pipeline = pipeline     # 可不可以重疊處理
         self.holding = ""            # 目前因為直播暫停中的原因（空字串＝沒有暫停）
+        self.running: dict[str, str] = {}   # 執行中的工作 → "gpu"（分離中）／"post"（分析、存檔）
+        self.oom_until = 0.0                # 顯示卡記憶體不夠過：這個時間之前只同時分離一首
+        self.paused = False                 # 「全部暫停」：處理歌曲的工作都先停（錄音評分、匯出照常）
+        if live_safe:
+            try:
+                self.paused = bool(load_config().get("queue_paused"))
+            except Exception:
+                pass
         threading.Thread(target=self._run, daemon=True).start()
 
     def _held(self, jid: str) -> bool:
         st = self.state.get(jid) or {}
         return self.live_safe and st.get("label") in LIVE_BACKGROUND
 
-    def _next(self, hold: bool):
-        """挑下一個要做的工作。直播中跳過背景工作，先做使用者在等的（例如直播中匯入的歌）。"""
+    def _pausable(self, st: dict) -> bool:
+        return st.get("kind") in ("process", "playlist")
+
+    def set_paused(self, on: bool) -> None:
+        """全部暫停／繼續處理。暫停時處理中的歌在下一個進度點停下、讓出顯示卡，繼續後從頭重做這首。"""
+        with self.cv:
+            self.paused = on
+            if on:
+                for j in self.running:
+                    if self._pausable(self.state.get(j) or {}):
+                        self.state[j]["pause"] = True
+            self.cv.notify_all()
+        try:
+            cfg = load_config()
+            cfg["queue_paused"] = on
+            save_config(cfg)
+        except Exception as e:
+            log_error("save queue_paused", e)
+
+    def _slots(self, hold: bool) -> int:
+        """同時可以分離幾首。"""
+        if not self.pipeline or hold or time.time() < self.oom_until:
+            return 1
+        try:
+            return 2 if load_config().get("parallel_separation") else 1
+        except Exception:
+            return 1
+
+    def _can_start(self, st: dict, slots: int) -> bool:
+        def pipelined(job):
+            return (job.get("kind") == "playlist" or
+                    (job.get("kind") == "process" and job.get("label") in PIPELINE_LABELS))
+        if not self.running:
+            return True
+        if not self.pipeline or not pipelined(st):
+            return False   # 其他工作（錄音評分、匯出、壓縮）等前面的都做完才開始
+        others = [self.state.get(j) or {} for j in self.running]
+        if any(not pipelined(o) for o in others):
+            return False
+        if st.get("song") and any(o.get("song") == st.get("song") for o in others):
+            return False   # 同一首歌不同時處理
+        gpu = sum(1 for v in self.running.values() if v == "gpu")
+        return gpu < slots and len(self.running) < slots + 1
+
+    def _next(self, hold: bool, slots: int):
+        """挑下一個要做的工作。直播中跳過背景工作，先做使用者在等的（例如直播中匯入的歌）。
+        回傳 (jid, fn, 只剩直播中暫停的工作)。"""
         for n, (jid, fn) in enumerate(self.pending):
             st = self.state.get(jid) or {}
             if st.get("status") == "cancelled":
                 self.pending.pop(n)
-                return jid, None
+                return jid, None, False
             if hold and st.get("label") in LIVE_BACKGROUND:
                 continue
+            if self.paused and self._pausable(st):
+                continue
+            if not self._can_start(st, slots):
+                return None, None, False   # 依順序等前面的，不插隊
             self.pending.pop(n)
-            return jid, fn
-        return None, None
+            return jid, fn, False
+        return None, None, bool(self.pending) and not self.paused
 
     def submit(self, kind: str, song_id: str, fn, label: str = "") -> str:
         jid = uuid.uuid4().hex[:10]
@@ -2992,7 +3259,7 @@ class Jobs:
                                "status": "queued", "step": "排隊中", "progress": 0.0,
                                "error": None, "created": time.time()}
             self.pending.append((jid, fn))
-            self.cv.notify()
+            self.cv.notify_all()
         return jid
 
     def move(self, jid: str, delta: int) -> bool:
@@ -3009,6 +3276,17 @@ class Jobs:
             b = next(n for n, (j, _) in enumerate(self.pending) if j == ids[k])
             self.pending[a], self.pending[b] = self.pending[b], self.pending[a]
             return True
+
+    def to_front(self, jid: str) -> bool:
+        """移到佇列最前面（下一個開始處理）。"""
+        with self.cv:
+            for n, (j, fn) in enumerate(self.pending):
+                if j == jid and self.state[j]["status"] == "queued":
+                    self.pending.insert(0, self.pending.pop(n))
+                    self.state[j]["priority"] = True
+                    self.cv.notify_all()
+                    return True
+        return False
 
     def upcoming(self, label: str, n: int) -> list[str]:
         """排在最前面、還沒開始的 n 個工作的歌曲編號（只看指定種類）。"""
@@ -3104,49 +3382,97 @@ class Jobs:
 
     def _run(self):
         while True:
-            while True:
-                st = live_status() if self.live_safe else {"hold": False}   # 查程式清單可能要幾秒，不要鎖著佇列查
-                with self.cv:
-                    jid, fn = self._next(st["hold"])
-                    if jid:
-                        break
-                    if self.pending:   # 只剩直播中暫停的背景工作
+            st = live_status() if self.live_safe else {"hold": False}   # 查程式清單可能要幾秒，不要鎖著佇列查
+            slots = self._slots(st["hold"])
+            with self.cv:
+                jid, fn, held = self._next(st["hold"], slots)
+                if jid is None:
+                    if held and not self.running:   # 只剩直播中暫停的背景工作
                         reason = st.get("reason") or "直播中"
                         self.holding = reason
                         for j, _ in self.pending:
                             js = self.state.get(j)
                             if js and js["status"] == "queued":
                                 js["step"] = f"直播中暫停（{reason}），結束後自動繼續"
-                        self.cv.wait(5)
-                    else:
+                    elif not held:
                         self.holding = ""
-                        self.cv.wait()
-            self.holding = ""
-            if fn is None or self.get(jid)["status"] == "cancelled":
-                continue
-            self.update(jid, status="running", step="開始")
+                    if self.paused:
+                        for j, _ in self.pending:
+                            js = self.state.get(j)
+                            if js and js["status"] == "queued" and self._pausable(js):
+                                js["step"] = "已全部暫停"
+                    self.cv.wait(5 if (self.pending or self.running) else None)
+                    continue
+                self.holding = ""
+                if fn is None or self.state[jid]["status"] == "cancelled":
+                    continue
+                self.running[jid] = "gpu"
+                self.state[jid].update(status="running", step="開始")
+            threading.Thread(target=self._work, args=(jid, fn), daemon=True, name=f"job-{jid}").start()
 
-            def report(step, p, jid=jid):
-                if (self.state.get(jid) or {}).get("cancel"):
-                    raise JobCancelled()
-                self.update(jid, step=step, progress=round(p, 3))
-                if self._held(jid) and live_status()["hold"]:
-                    raise JobDeferred()   # 做到一半開播：讓出顯示卡，直播後重做
-            try:
-                fn(report)
-                self.update(jid, status="done", step="完成", progress=1.0)
-            except JobDeferred:
-                with self.cv:
-                    self.state[jid].update(status="queued", step="直播中暫停，結束後重新開始", progress=0.0)
+    def _work(self, jid: str, fn) -> None:
+        def report(step, p, jid=jid):
+            if (self.state.get(jid) or {}).get("cancel"):
+                raise JobCancelled()
+            self.update(jid, step=step, progress=round(p, 3))
+            if (self.state.get(jid) or {}).get("pause"):
+                raise JobDeferred("paused")   # 按了全部暫停：讓出顯示卡，繼續後重做這首
+            if self._held(jid) and live_status()["hold"]:
+                raise JobDeferred()   # 做到一半開播：讓出顯示卡，直播後重做
+
+        def gpu_done():
+            """分離做完了（接下來是分析旋律、存檔）：讓下一首先開始分離。"""
+            with self.cv:
+                if jid in self.running:
+                    self.running[jid] = "post"
+                    self.cv.notify_all()
+        report.gpu_done = gpu_done
+
+        def check(jid=jid):
+            """顯示卡子程式在跑、沒有進度回報時，也要能馬上停止／暫停。"""
+            st = self.state.get(jid) or {}
+            if st.get("cancel"):
+                raise JobCancelled()
+            if st.get("pause"):
+                raise JobDeferred("paused")
+        import gpu_worker as G
+        G.CURRENT.check = check
+        try:
+            fn(report)
+            self.update(jid, status="done", step="完成", progress=1.0)
+        except JobDeferred as e:
+            paused = bool(e.args) and e.args[0] == "paused"
+            with self.cv:
+                self.state[jid].pop("pause", None)
+                self.state[jid].update(status="queued", progress=0.0,
+                                       step="已全部暫停，繼續後重新開始這首" if paused else "直播中暫停，結束後重新開始")
+                if paused:
+                    self.pending.insert(0, (jid, fn))   # 繼續處理時先做這首
+                else:
                     self.pending.append((jid, fn))
+            free_gpu()
+        except JobCancelled:
+            self.update(jid, status="cancelled", step="已取消")
+        except UserError as e:
+            self.update(jid, status="error", error=str(e))
+        except Exception as e:
+            traceback.print_exc()
+            if "out of memory" in str(e).lower() and not self.state[jid].get("oom_retry") and len(self.running) > 1:
+                # 兩首同時處理時顯示卡記憶體不夠：接下來十分鐘只處理一首，這首排回最前面重做
+                self.oom_until = time.time() + 600
                 free_gpu()
-            except JobCancelled:
-                self.update(jid, status="cancelled", step="已取消")
-            except UserError as e:
-                self.update(jid, status="error", error=str(e))
-            except Exception as e:
-                traceback.print_exc()
+                with self.cv:
+                    self.state[jid].update(status="queued", step="顯示卡記憶體不夠，稍後重新處理", progress=0.0, oom_retry=True)
+                    self.pending.insert(0, (jid, fn))
+                log_error("parallel separation OOM", e)
+            else:
                 self.update(jid, status="error", error=f"{type(e).__name__}: {e}")
+        finally:
+            G.CURRENT.check = None
+            with self.cv:
+                self.running.pop(jid, None)
+                (self.state.get(jid) or {}).pop("pause", None)
+                self.cv.notify_all()
 
 
 def process_song(song_id: str, steps: list[str], cfg_override: dict | None = None):
@@ -3167,6 +3493,9 @@ def process_song(song_id: str, steps: list[str], cfg_override: dict | None = Non
             step_separate(d, cfg, report)
             if not light and meta.get("live_light"):
                 update_meta(d, live_light=False)   # 高品質補做完成
+            recognize = "lyrics" in steps and not ("import" in steps and not cfg.get("auto_recognize_lyrics", False))
+            if not recognize:   # 接下來只剩分析旋律、存檔：下一首可以先開始分離
+                getattr(report, "gpu_done", lambda: None)()
             measure_stem_loudness(d)   # 各音軌響度，播放時依開著的音軌調整音量
         if "pitch" in steps:
             step_pitch(d, cfg, report)
@@ -3189,6 +3518,8 @@ def process_song(song_id: str, steps: list[str], cfg_override: dict | None = Non
         elif "lyrics" in steps:
             try:
                 step_lyrics(d, cfg, report)   # 歌詞相關的提示由 step_lyrics 自己更新
+            except JobDeferred:
+                raise
             except JobCancelled:
                 with _META_LOCK:   # 讀出到寫回之間不讓別的執行緒改這首歌的資料
                     meta = read_meta(d)
@@ -3320,7 +3651,7 @@ def similarity(recognized: str, candidate: str) -> float | None:
     return round(sum(x.size for x in m.get_matching_blocks()) / len(a), 3)
 
 
-USER_AGENT = "LeihuLiantai/2.1.1 (+https://github.com/samael-leung/Leihu-singsing)"   # HTTP 標頭只能用英文字
+USER_AGENT = "LeihuLiantai/2.3.1 (+https://github.com/samael-leung/Leihu-singsing)"   # HTTP 標頭只能用英文字
 
 
 def _http_json(url: str, headers: dict | None = None, timeout: int = 8):
@@ -3534,11 +3865,35 @@ def lyrics_timing_fit(d: Path) -> float | None:
     return round(float(np.mean(np.exp(-(dist ** 2) / (2 * 0.35 ** 2)))), 2)
 
 
+def recheck_bad(after: float | None, before: float | None) -> bool:
+    """2.1.1：只看「重新分離前後」差多少。歌詞句子常從一段歌聲中間開始，吻合度本來就不高，
+    單看分數會把大部分歌都標起來；分離前後明顯變差（掉 0.15 以上）才代表歌聲位置真的變了。"""
+    return after is not None and before is not None and before - after >= 0.15
+
+
+def clear_false_recheck() -> int:
+    """2.1.0 的判斷太嚴，把很多歌詞沒問題的歌也標成「建議重新匯入歌詞」：依新的標準重新判斷一次。"""
+    n = 0
+    for d in LIB.iterdir() if LIB.exists() else []:
+        mp = d / "meta.json"
+        if not mp.exists():
+            continue
+        try:
+            m = read_meta(d)
+        except Exception:
+            continue
+        rc = m.get("lyrics_recheck")
+        if isinstance(rc, dict) and not recheck_bad(rc.get("fit"), rc.get("before")):
+            update_meta(d, lyrics_recheck=None)
+            n += 1
+    return n
+
+
 def check_lyrics_after_reseparate(d: Path, before: float | None) -> None:
     """2.1.0：重新分離／分析旋律後，目前的歌詞和新的歌聲位置對不太上 → 標「建議重新匯入歌詞」。
     標記記下當時歌詞檔的時間，之後歌詞有改過（重新匯入、套用線上歌詞、手動調整）就自動消失。"""
     after = lyrics_timing_fit(d)
-    bad = after is not None and (after < 0.55 or (before is not None and before - after >= 0.2))
+    bad = recheck_bad(after, before)
     rec = None
     if bad:
         try:
@@ -3887,16 +4242,207 @@ def apply_candidate(d: Path, cand: dict) -> tuple[str, str]:
 
 # ---------------------------------------------------------------- 分類
 
-CATS_PATH = LIB / "categories.json"
+def _cats_path() -> Path:
+    return LIB / "categories.json"   # 歌曲庫可以搬家：每次用目前的位置
 
 
 def load_categories() -> list[str]:
     try:
-        return [c for c in json.loads(CATS_PATH.read_text("utf-8")) if isinstance(c, str)]
+        return [c for c in json.loads(_cats_path().read_text("utf-8")) if isinstance(c, str)]
     except Exception:
         return []
 
 
 def save_categories(cats: list[str]) -> None:
     LIB.mkdir(exist_ok=True)
-    atomic_write_text(CATS_PATH, json.dumps(cats, ensure_ascii=False))
+    atomic_write_text(_cats_path(), json.dumps(cats, ensure_ascii=False))
+
+
+# ---------------------------------------------------------------- 歌曲庫／模型搬移（2.3.0）
+STORAGE = {"moving": False}   # 搬移中：擋住會寫進歌曲庫的操作
+
+
+def dir_size(p: Path) -> tuple[int, int]:
+    """資料夾大小（位元組、檔案數）。"""
+    total = n = 0
+    for root, _dirs, files in os.walk(p):
+        for f in files:
+            try:
+                total += os.path.getsize(os.path.join(root, f))
+                n += 1
+            except OSError:
+                pass
+    return total, n
+
+
+def drives() -> list[dict]:
+    """可以搬過去的磁碟（Windows：每個磁碟機代號的剩餘空間）。"""
+    out = []
+    if sys.platform == "win32":
+        import string
+        for L in string.ascii_uppercase:
+            r = f"{L}:\\"
+            if os.path.exists(r):
+                try:
+                    u = shutil.disk_usage(r)
+                    out.append({"path": r, "free": u.free, "total": u.total})
+                except OSError:
+                    pass
+    else:
+        u = shutil.disk_usage("/")
+        out.append({"path": "/", "free": u.free, "total": u.total})
+    return out
+
+
+def storage_info() -> dict:
+    cfg = load_config()
+    info = {"library": str(LIB), "models": str(MODELS),
+            "library_default": LIB == DEFAULT_LIB, "models_default": MODELS == DEFAULT_MODELS,
+            "library_missing": not LIB.exists(), "drives": drives(),
+            "old": [p for p in cfg.get("storage_old", []) if Path(p).exists()],
+            "moving": STORAGE["moving"]}
+    for k, p in (("library", LIB), ("models", MODELS)):
+        info[k + "_size"] = dir_size(p)[0] if p.exists() else 0
+        try:
+            info[k + "_free"] = shutil.disk_usage(p if p.exists() else p.anchor).free
+        except OSError:
+            info[k + "_free"] = None
+    return info
+
+
+def _inside(a: Path, b: Path) -> bool:
+    """a 是不是 b 本身或在 b 裡面。"""
+    try:
+        a.resolve().relative_to(b.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def move_storage(target: str, what: list[str], report) -> dict:
+    """把歌曲庫（library）和／或模型（models）複製到 target 底下，逐檔核對大小後才改用新位置。
+    舊的那份不刪，記在設定的 storage_old，使用者確認新位置正常後再刪。中途停止：設定不變，照常用舊的。"""
+    global LIB, MODELS
+    tgt = Path(target.strip().strip('"'))
+    if not tgt.is_absolute():
+        raise UserError("請輸入完整的資料夾位置，例如 D:\\雷虎練唱台資料")
+    if not Path(tgt.anchor).exists():
+        raise UserError(f"找不到磁碟 {tgt.anchor}")
+    srcs = [(k, LIB if k == "library" else MODELS) for k in ("library", "models") if k in what]
+    if not srcs:
+        raise UserError("請至少選一項要搬移的東西")
+    plan = []
+    for k, src in srcs:
+        dst = tgt / k
+        if _inside(dst, src) or _inside(src, dst):
+            raise UserError("新位置不能在原本的資料夾裡面（或包含原本的資料夾）")
+        if dst.exists() and any(dst.iterdir()):
+            raise UserError(f"{dst} 已經有檔案，請換一個空的資料夾")
+        if not src.exists():
+            raise UserError(f"找不到目前的{'歌曲庫' if k == 'library' else '模型'}資料夾：{src}")
+        plan.append((k, src, dst))
+    report("計算大小", 0.01)
+    need = 0
+    files: list[tuple[Path, Path, int]] = []
+    for k, src, dst in plan:
+        for root, _dirs, fs in os.walk(src):
+            for f in fs:
+                s = Path(root) / f
+                if f.endswith((".part", ".tmp")) or ".part" in f:
+                    continue   # 下載到一半的暫存檔不搬
+                try:
+                    size = s.stat().st_size
+                except OSError:
+                    continue
+                files.append((s, dst / s.relative_to(src), size))
+                need += size
+    free = shutil.disk_usage(tgt.anchor).free
+    if need > free - (1 << 30):   # 至少多留 1 GB
+        raise UserError(f"空間不夠：需要 {need / 1e9:.1f} GB，{tgt.anchor} 只剩 {free / 1e9:.1f} GB")
+    done, t0, last = 0, time.time(), 0.0
+    try:
+        for s, d, size in files:
+            d.parent.mkdir(parents=True, exist_ok=True)
+            with open(s, "rb") as fi, open(d, "wb") as fo:
+                while True:
+                    b = fi.read(8 << 20)
+                    if not b:
+                        break
+                    fo.write(b)
+                    done += len(b)
+                    if time.time() - last > 0.5:
+                        last = time.time()
+                        sp = done / max(1e-3, last - t0)
+                        left = (need - done) / sp if sp > 0 else 0
+                        eta = f"（約剩 {left / 60:.0f} 分鐘）" if left >= 90 else ""
+                        report(f"搬移中 {done / 1e9:.1f}／{need / 1e9:.1f} GB{eta}", 0.02 + 0.93 * done / max(1, need))
+            shutil.copystat(s, d)
+            if d.stat().st_size != size:
+                raise UserError(f"複製後大小不符：{s.name}，已停止搬移（仍使用原本的位置）")
+    except BaseException:
+        for _k, _src, dst in plan:   # 沒搬完：清掉新位置的半成品，繼續用舊的
+            shutil.rmtree(dst, ignore_errors=True)
+        raise
+    report("核對檔案", 0.96)
+    for k, src, dst in plan:
+        a, b = dir_size(dst)
+        exp = sum(sz for s, d, sz in files if _inside(d, dst))
+        if a != exp:
+            shutil.rmtree(dst, ignore_errors=True)
+            raise UserError("核對失敗：新位置的檔案總大小不符，已停止搬移（仍使用原本的位置）")
+    cfg = load_config()
+    old = list(cfg.get("storage_old", []))
+    for k, src, dst in plan:
+        cfg[k + "_dir"] = str(dst)
+        if str(src) not in old:
+            old.append(str(src))
+    cfg["storage_old"] = old
+    save_config(cfg)
+    _apply_storage()
+    try:
+        _SONG_CACHE.clear()
+    except Exception:
+        pass
+    report("完成", 1.0)
+    return {k: str(dst) for k, _src, dst in plan}
+
+
+def delete_old_storage(path: str) -> None:
+    """刪除搬移前的舊位置（只能刪設定裡記下來的舊位置，而且不能是目前正在用的）。"""
+    cfg = load_config()
+    old = cfg.get("storage_old", [])
+    if path not in old:
+        raise UserError("只能刪除搬移前的舊位置")
+    p = Path(path)
+    if _inside(LIB, p) or _inside(MODELS, p) or _inside(p, LIB) or _inside(p, MODELS):
+        raise UserError("這是目前正在使用的位置，不能刪除")
+    shutil.rmtree(p, ignore_errors=True)
+    cfg["storage_old"] = [x for x in old if x != path]
+    save_config(cfg)
+
+
+def adopt_storage(path: str) -> dict:
+    """換電腦、外接硬碟：直接改用一個已經有歌曲庫的資料夾（例如從舊電腦整個複製過來的），不複製檔案。
+    path 可以是含有 library／models 的資料夾，或 library 資料夾本身。"""
+    global LIB, MODELS
+    p = Path(path.strip().strip('"'))
+    if not p.is_absolute() or not p.exists():
+        raise UserError("找不到這個資料夾")
+    lib = p / "library" if (p / "library").is_dir() else p
+    n = sum(1 for d in lib.iterdir() if (d / "meta.json").exists()) if lib.is_dir() else 0
+    if not n:
+        raise UserError("這個資料夾裡沒有練唱台的歌曲庫（找不到任何歌曲）")
+    cfg = load_config()
+    cfg["library_dir"] = str(lib)
+    out = {"library": str(lib), "songs": n}
+    models = lib.parent / "models"
+    if lib.name == "library" and (models / "uvr").is_dir():
+        cfg["models_dir"] = str(models)
+        out["models"] = str(models)
+    save_config(cfg)
+    _apply_storage()
+    try:
+        _SONG_CACHE.clear()
+    except Exception:
+        pass
+    return out

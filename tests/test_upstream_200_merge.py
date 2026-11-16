@@ -31,7 +31,8 @@ class LiveFeatureTests(unittest.TestCase):
                        patch.object(P, 'LIB', self.song.parent),
                        patch.object(P, 'CONFIG_PATH', self.root / 'config.json'),
                        patch.object(P, 'MODELS', self.root / 'models'),
-                       patch.object(web, 'SETLIST_PATH', self.root / 'setlist.json')):
+                       patch.object(web, 'SETLIST_PATH', self.root / 'setlist.json'),
+                       patch.object(web, 'SETLIST_DIR', self.root / 'setlists')):
             change.start(); self.addCleanup(change.stop)
         P.MODELS.mkdir()
         P.write_meta(self.song, {'id': 'songaa', 'title': '測試/旋律譜', 'artist': '歌手',

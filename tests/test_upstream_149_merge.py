@@ -12,6 +12,7 @@ import soundfile as sf
 
 import app as web
 import pipeline as P
+import gpu_worker as G
 import share as SH
 
 
@@ -46,7 +47,8 @@ class Upstream149Tests(unittest.TestCase):
             with self.subTest(source=source):
                 P.update_meta(self.song, lyrics_source=source)
                 (self.song / 'lyrics.lrc').write_text('[00:01.00]Keep these corrected lyrics\n')
-                with patch.object(P, 'module_status', return_value={'whisper': True}), \
+                with patch.object(G, 'call', side_effect=lambda task, *args, progress, **kw: G.t_whisper(P, progress, *args, **kw)), \
+                     patch.object(P, 'module_status', return_value={'whisper': True}), \
                      patch.object(P, '_whisper_model', return_value=model), \
                      patch.object(P, 'read_audio', return_value=np.zeros(P.PITCH_SR)):
                     P.step_lyrics(self.song, P.DEFAULT_CONFIG, lambda *args: None)

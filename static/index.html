@@ -8,7 +8,7 @@
 </head>
 <body>
 <header class="bar">
-  <span class="logo">雷虎練唱台<small id="ver">2.1.1</small></span>
+  <span class="logo">雷虎練唱台<small id="ver">2.3.1</small></span>
   <nav class="row">
     <button id="nav-lib" class="tab cur">歌曲庫</button>
     <button id="nav-practice" class="tab" disabled>練唱</button>
@@ -34,6 +34,8 @@
     <div class="lib-head">
       <h1>歌曲庫</h1>
       <label class="btn primary">匯入歌曲<input type="file" id="import" accept="audio/*,.mp3,.wav,.flac,.ogg,.m4a" multiple hidden></label>
+      <button id="export-open" type="button">匯出歌單</button>
+      <button id="lib-setlist" type="button" title="這段時間唱過的歌，也能回顧過去的場次、產生 YouTube 章節">直播歌單</button>
       <span class="hint">處理都在這台電腦上進行，第一次使用各模型時需要連網下載。</span>
     </div>
     <form id="yt-form" class="yt">
@@ -63,6 +65,15 @@
       <p class="hint">每次列出最多 200 首，勾選後逐首下載、分軌及分析。一首失敗不影響後續歌曲；已存在的歌曲會略過。僅適用可存取的清單與影片，私人／已刪除項目可能無法下載。</p>
     </details>
     <div id="drop" class="drop">把音訊檔拖到這裡。匯入後會自動分離主唱、合音、伴奏，分析旋律並辨識歌詞。</div>
+    <div id="jobs-bar" class="row jobs-bar" hidden>
+      <span id="jobs-sum" class="hint"></span><span class="spacer"></span>
+      <button id="jobs-pause" class="ghost" title="處理中的那首在下一個進度點停下、讓出顯示卡；錄音評分、KEY 轉換照常（Ctrl+Alt+P）">全部暫停</button>
+    </div>
+    <div id="jobs-paused" class="yt-pause" role="status" hidden>
+      <div><b>處理已全部暫停。</b>
+        <span class="hint">排隊中的歌會等你按「繼續處理」才開始；暫停時做到一半的那首會從頭重做。重開程式後仍維持暫停。錄音評分、KEY 轉換不受影響。</span></div>
+      <button id="jobs-resume">繼續處理</button>
+    </div>
     <div id="jobs" class="jobs"></div>
     <div id="live-queue" class="live-queue">
       <div class="row"><b>待唱清單</b><span id="lq-n" class="hint"></span><span class="spacer"></span>
@@ -76,7 +87,12 @@
       <span class="lib-right">
         <button id="lib-draw" title="從目前顯示的歌（分類、搜尋結果）裡隨機抽一首處理好的歌，直接進練唱">抽歌</button>
         <select id="lib-sort" aria-label="排序"><option value="new">最新加入</option><option value="title">依曲名</option><option value="artist">依歌手</option></select>
-        <input id="lib-q" type="search" placeholder="搜尋曲名、歌手、歌詞" aria-label="搜尋歌曲">
+        <select id="lib-scope" aria-label="搜尋範圍" title="搜尋範圍">
+          <option value="name">搜歌名、歌手</option>
+          <option value="lyrics">搜歌詞</option>
+          <option value="all">全部都搜</option>
+        </select>
+        <input id="lib-q" type="search" placeholder="搜尋曲名、歌手" aria-label="搜尋歌曲">
       </span>
     </div>
     <div id="cat-tools" class="row cat-tools" hidden>
@@ -185,7 +201,7 @@
         <button id="lv-search" class="ghost" title="歌詞不對、或整份換掉：搜尋線上歌詞（LRCLIB、網易雲、酷狗）">搜尋線上歌詞</button>
         <button id="lv-flag" class="ghost" title="歌詞不準先標起來，下播後到歌曲庫的「歌詞待修」一次處理（Ctrl+Alt+F）">歌詞待修</button>
         <span class="spacer"></span>
-        <button id="lv-setlist" class="ghost" title="這場直播唱過的歌（直播模式下播放超過 30 秒會記下來）">本場歌單</button>
+        <button id="lv-setlist" class="ghost" title="這段時間唱過的歌（播放超過 30 秒就會記下來）；也能回顧過去的場次、產生 YouTube 章節">直播歌單</button>
         <span class="hint">調整會自動儲存</span>
       </div>
     </div>
@@ -520,96 +536,168 @@
 
 <div id="setlist-dlg" class="modal" hidden>
   <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sl-title">
-    <h1 id="sl-title">本場歌單</h1>
-    <p class="hint">直播模式下，一首歌播放超過 30 秒就記下來。距離上一首超過 6 小時會自動當成新的一場。</p>
-    <textarea id="sl-text" rows="14" readonly></textarea>
-    <div class="row"><button id="sl-copy" class="primary">複製文字</button><button id="sl-new" class="ghost danger">開始新的一場（清空）</button>
+    <h1 id="sl-title">直播歌單</h1>
+    <p class="hint">不管是不是直播模式，一首歌播放超過 30 秒就記下來；距離上一首超過 6 小時會自動當成新的一場，同一段時間唱的歌都在同一場。過去的場次也能在這裡回顧、匯出。</p>
+    <div class="row sl-opts">
+      <select id="sl-session" aria-label="選擇場次"></select>
+      <select id="sl-mode" aria-label="顯示方式"><option value="list">歌單文字</option><option value="chapters">YouTube 章節時間戳</option></select>
+      <label id="sl-start-f" class="row" hidden>開台時間 <input id="sl-start" type="time" step="1"></label>
+    </div>
+    <div class="sl-items-head row"><label class="row"><input id="sl-all" type="checkbox"> 全選</label>
+      <span class="spacer"></span>
+      <button id="sl-del" class="ghost danger" type="button">刪除勾選的歌</button>
+      <button id="sl-drop" class="ghost danger" type="button">刪除這一場</button></div>
+    <div id="sl-items" class="sl-items"></div>
+    <p id="sl-hint" class="hint" hidden>開台時間是影片的 00:00。預設是第一首歌開始的時間，請改成實際開台（影片開始）的時間；YouTube 要至少 3 段、每段 10 秒以上才會顯示章節。</p>
+    <textarea id="sl-text" rows="8" readonly></textarea>
+    <div class="row"><button id="sl-copy" class="primary">複製文字</button><button id="sl-save" class="ghost">存成文字檔</button><button id="sl-xlsx" class="ghost">匯出 Excel</button>
+      <button id="sl-new" class="ghost danger">開始新的一場</button>
       <span class="spacer"></span><button id="sl-close" class="ghost">關閉</button></div>
   </div>
 </div>
 
+<div id="export-dlg" class="modal" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="ex-title-h">
+    <h1 id="ex-title-h">匯出歌單</h1>
+    <div class="field"><span>格式</span>
+      <label class="row"><input type="radio" name="ex-fmt" value="html" checked> 網頁：給觀眾看，可以搜尋、依分類切換</label>
+      <label class="row"><input type="radio" name="ex-fmt" value="xlsx"> Excel（.xlsx）：可以自己排版、篩選</label>
+      <label class="row"><input type="radio" name="ex-fmt" value="csv"> 練唱台歌單（.csv）：備份、換電腦用</label>
+      <span class="hint">網頁檔可以直接傳到 Discord 或放上網路空間，點開就能看。練唱台歌單可以在「批次加入」匯回，會依 YouTube 網址自動重新下載。</span></div>
+    <label class="field" id="ex-title-f"><span>標題</span><input id="ex-title" type="text" maxlength="60" placeholder="點歌清單"></label>
+    <div class="field"><span>範圍</span>
+      <label class="row"><input type="radio" name="ex-scope" value="all" checked> 全部分類</label>
+      <label class="row"><input type="radio" name="ex-scope" value="cur"> 只匯出目前的分類（<span id="ex-cur"></span>）</label>
+      <label class="row"><input id="ex-ready" type="checkbox" checked> 只列處理好、能唱的歌</label>
+      <label class="row" id="ex-key-f"><input id="ex-key" type="checkbox" checked> 顯示 KEY</label></div>
+    <p class="hint">檔案會存到「下載\雷虎練唱台」，存好會在檔案總管裡顯示。</p>
+    <div class="row"><button id="ex-go" class="primary">匯出</button><span class="spacer"></span><button id="ex-close" class="ghost">關閉</button></div>
+  </div>
+</div>
+
+<div id="storage-dlg" class="modal" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="st-title">
+    <h1 id="st-title">搬移歌曲庫</h1>
+    <p class="hint">空間不夠或換電腦時，把處理好的歌（和可選的模型）搬到別的磁碟。會先<b>複製</b>到新位置並逐一核對，沒問題才改用新位置；舊的那份會留著，你確認新位置正常後再到設定裡刪除。搬移期間處理佇列會暫停、暫時不能練唱，搬完自動恢復。</p>
+    <div class="field"><span>要搬的東西</span>
+      <label class="row"><input id="st-lib" type="checkbox" checked> <span id="st-lib-l">歌曲庫</span></label>
+      <label class="row"><input id="st-models" type="checkbox"> <span id="st-models-l">模型（可選）</span></label></div>
+    <div class="field"><span>新的位置</span>
+      <div class="row"><input id="st-target" type="text" placeholder="例如 D:\雷虎練唱台資料" style="flex:1">
+        <button id="st-pick" type="button" class="ghost" hidden>選擇資料夾…</button></div>
+      <div id="st-drives" class="st-drives"></div>
+      <span class="hint">會在這個資料夾裡建立 library（歌曲庫）和 models（模型）兩個資料夾；請選空的資料夾。</span></div>
+    <p id="st-need" class="hint"></p>
+    <div class="row"><button id="st-go" class="primary">開始搬移</button>
+      <button id="st-adopt" class="ghost" title="換電腦、外接硬碟：選一個已經有歌曲庫的資料夾（例如從舊電腦整個複製過來的），直接改用它，不複製檔案">改用這裡現有的歌曲庫</button>
+      <span class="spacer"></span><button id="st-close" class="ghost">取消</button></div>
+  </div>
+</div>
+
 <div id="settings" class="modal" hidden>
-  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="set-title">
+  <div class="sheet set-sheet" role="dialog" aria-modal="true" aria-labelledby="set-title">
     <h1 id="set-title">設定</h1>
-    <div class="field"><span>已安裝的離線功能</span><div id="mods" class="mods"></div></div>
-    <label class="field"><span>AI 模式</span><select id="cfg-ai-mode"><option value="local">本機模型（Ollama，無 API 費用）</option><option value="api">API（使用供應商帳戶）</option></select></label>
-    <div id="cfg-local" class="detail">
-      <label class="field"><span>Ollama 服務網址</span><input id="cfg-url" type="url" placeholder="http://127.0.0.1:11434"></label>
-      <label class="row"><input id="cfg-auto-model" type="checkbox">依硬體自動選擇模型</label>
-      <div id="cfg-hardware" class="hint" role="status"></div>
-      <label class="field"><span>本機模型</span><input id="cfg-local-model" type="text" placeholder="qwen2.5:7b"></label>
-      <p class="hint">儲存時會啟動 Ollama、下載選定模型並驗證回覆。已有模型會重用；中斷後重新儲存即可續傳。每次 AI 回覆後會釋放模型記憶體。</p>
+    <div class="set-tabs" role="tablist"><button type="button" role="tab" data-tab="general">一般</button><button type="button" role="tab" data-tab="audio">聲音輸出</button><button type="button" role="tab" data-tab="live">直播</button><button type="button" role="tab" data-tab="lyrics">歌詞</button><button type="button" role="tab" data-tab="process">處理品質</button><button type="button" role="tab" data-tab="storage">儲存空間</button><button type="button" role="tab" data-tab="ai">AI</button></div>
+    <div class="set-pane" data-pane="general" role="tabpanel" aria-label="一般" hidden>
+      <label class="field"><span>字體（練唱畫面、歌詞與匯出的影片／成績卡）</span>
+        <select id="cfg-font"><option value="huninn">粉圓（內建 jf open 粉圓）</option><option value="kai">楷書（歌詞楷書、介面黑體）</option><option value="sans">黑體（微軟正黑體）</option></select></label>
+      <div class="field"><span>已安裝的離線功能</span><div id="mods" class="mods"></div></div>
     </div>
-    <div id="cfg-api" class="detail" hidden>
-      <label class="field"><span>API 供應商</span><select id="cfg-provider"><option value="openai">OpenAI</option><option value="claude">Claude（Anthropic）</option><option value="gemini">Gemini（Google）</option></select></label>
-      <div id="cfg-openai" class="detail">
-        <label class="field"><span>OpenAI 模型</span><input id="cfg-openai-model" type="text" placeholder="gpt-4.1-mini"></label>
-        <label class="field"><span>OpenAI API 金鑰</span><input id="cfg-openai-key" type="password" autocomplete="off" placeholder="輸入新金鑰；留空保留原值"></label>
+    <div class="set-pane" data-pane="audio" role="tabpanel" aria-label="聲音輸出" hidden>
+      <div class="field" id="out-field"><span>音樂輸出裝置（練唱、試聽的聲音從這裡播出）</span>
+        <select id="cfg-out"><option value="">系統預設</option></select>
+        <span class="hint">Discord「分享應用程式」分享這個桌面視窗時沒有聲音。要給朋友看畫面又聽到音樂，按下面的按鈕開一個直播分享用的練唱台視窗（外觀一樣），Discord 分享那個視窗，畫面和音樂會一起送出。</span>
+        <div><button id="open-in-browser" type="button">開啟直播分享用視窗</button></div></div>
+      <div class="field"><span>自己聽的裝置（「原唱只給我聽」用：選你的耳機）</span>
+        <select id="cfg-mon"><option value="">（未設定）</option></select>
+        <span class="hint">開啟「原唱只給我聽」後：上面的「音樂輸出裝置」只播伴奏和合音（給觀眾，OBS 收這個裝置），這裡選的裝置會多聽到原唱和導引音。兩個要選不同的裝置；只有一副耳機時，觀眾那邊可以裝免費的虛擬音效線 VB-Cable。</span></div>
+    </div>
+    <div class="set-pane" data-pane="live" role="tabpanel" aria-label="直播" hidden>
+      <div class="field hk-field">
+        <label class="row"><input id="cfg-hotkeys" type="checkbox"> 全域快捷鍵：練唱台不在最前面時也能用（Stream Deck、巨集鍵盤可以直接綁）</label>
+        <div id="hk-list" class="hk-list"></div>
+        <span id="hk-msg" class="hint">點按鍵欄位後按下新的組合（要加 Ctrl、Alt、Shift 或 Win；F13～F24 可以單獨使用），Esc 取消。改完馬上生效，只控制桌面版視窗。</span>
       </div>
-      <div id="cfg-claude" class="detail" hidden>
-        <label class="field"><span>Claude 模型</span><input id="cfg-claude-model" type="text" placeholder="claude-sonnet-4-6"></label>
-        <label class="field"><span>Anthropic API 金鑰</span><input id="cfg-claude-key" type="password" autocomplete="off" placeholder="輸入新金鑰；留空保留原值"></label>
+      <label class="row"><input id="cfg-pause-live" type="checkbox"> 直播中暫停背景處理：偵測到 OBS、VTube Studio 等直播軟體在跑，或直播模式開著時，不做分離、分析、辨識</label>
+    </div>
+    <div class="set-pane" data-pane="lyrics" role="tabpanel" aria-label="歌詞" hidden>
+      <label class="row"><input id="cfg-autorec" type="checkbox"> 匯入時自動辨識歌詞（關閉時直接套用線上搜尋到的第一個版本，處理也比較快）</label>
+      <label class="row"><input id="cfg-tw" type="checkbox"> 簡體歌詞轉成繁體（只轉字形，不改用詞）</label>
+      <label class="field"><span>歌詞辨識模型</span>
+        <select id="cfg-whisper">
+          <option value="large-v3-turbo">large-v3-turbo（建議）</option>
+          <option value="large-v3">large-v3（最準、最慢）</option>
+          <option value="medium">medium</option>
+          <option value="small">small（最快）</option>
+        </select></label>
+      <label class="field"><span>歌詞語言</span>
+        <select id="cfg-lang">
+          <option value="">自動判斷（建議）</option><option value="zh">中文</option>
+          <option value="en">英文</option><option value="ja">日文</option><option value="ko">韓文</option>
+        </select></label>
+    </div>
+    <div class="set-pane" data-pane="process" role="tabpanel" aria-label="處理品質" hidden>
+      <label class="field"><span>人聲／伴奏分離品質（高品質＝BS-Roformer，伴奏殘留的人聲明顯更少，處理時間約兩倍）</span>
+        <select id="cfg-vq"><option value="auto">自動（有顯示卡用高品質）</option><option value="high">高品質（沒有顯示卡會非常慢）</option><option value="standard">標準（快）</option></select></label>
+      <label class="field"><span>主唱／合音分離品質（合音多的歌，高品質的旋律會準很多）</span>
+        <select id="cfg-kq"><option value="auto">自動（有顯示卡用高品質）</option><option value="high">高品質（沒有顯示卡會非常慢）</option><option value="standard">標準（快）</option></select></label>
+      <label class="field"><span>高品質分離的速度（大量匯入時建議「快速」）</span>
+        <select id="cfg-kov"><option value="2">快速（建議，結果幾乎相同）</option><option value="4">最精細（約慢一倍）</option></select></label>
+      <label class="row"><input id="cfg-autofine" type="checkbox" checked> 合音多、需要更精細處理的歌，自動再用最精細的方式分一次（排在佇列最後，不影響其他歌的處理）</label>
+      <label class="row"><input id="cfg-parallel" type="checkbox"> 閒置時兩首同時分離（實驗性）：沒在直播時，大量匯入或升級可以再快約兩到四成；顯示卡記憶體 10 GB 以上才建議開，不夠時會自動退回一次一首</label>
+      <div class="field"><span>已經處理過的歌</span>
+        <div><button id="cfg-upgrade" type="button">用高品質人聲模型重做全部歌曲</button></div>
+        <span class="hint">把還沒用新模型處理的歌排進佇列，重新分離人聲與伴奏、重新分析旋律；歌詞、錄音、KEY 設定都保留。排在最後、直播中會暫停，可以放著慢慢跑（有顯示卡一首約 1～2 分鐘）。</span></div>
+      <label class="field"><span>音高模型</span>
+        <select id="cfg-pitch"><option value="auto">自動（有顯示卡用 full）</option><option value="full">full（準、CPU 很慢）</option><option value="tiny">tiny（快）</option></select></label>
+      <details class="set-adv"><summary>進階：標準品質用的模型名稱</summary>
+      <label class="field"><span>人聲分離模型（標準品質用的）</span><input id="cfg-sep" type="text"></label>
+      <label class="field"><span>主唱／合音分離模型（標準）</span><input id="cfg-kara" type="text"></label>
+      </details>
+    </div>
+    <div class="set-pane" data-pane="storage" role="tabpanel" aria-label="儲存空間" hidden>
+      <div class="field"><span>儲存空間</span>
+        <div class="hint" id="storage-info"></div>
+        <div><button id="storage-compact" hidden>轉成 FLAC 節省空間</button></div></div>
+      <div class="field"><span>儲存位置（歌曲庫、模型）</span>
+        <div id="loc-info" class="storage-info hint">讀取中…</div>
+        <div><button id="st-open" type="button">搬移到其他位置…</button></div>
+        <div id="storage-old"></div></div>
+    </div>
+    <div class="set-pane" data-pane="ai" role="tabpanel" aria-label="AI" hidden>
+      <label class="field"><span>AI 模式</span><select id="cfg-ai-mode"><option value="local">本機模型（Ollama，無 API 費用）</option><option value="api">API（使用供應商帳戶）</option></select></label>
+      <div id="cfg-local" class="detail">
+        <label class="field"><span>Ollama 服務網址</span><input id="cfg-url" type="url" placeholder="http://127.0.0.1:11434"></label>
+        <label class="row"><input id="cfg-auto-model" type="checkbox">依硬體自動選擇模型</label>
+        <div id="cfg-hardware" class="hint" role="status"></div>
+        <label class="field"><span>本機模型</span><input id="cfg-local-model" type="text" placeholder="qwen2.5:7b"></label>
+        <p class="hint">儲存時會啟動 Ollama、下載選定模型並驗證回覆。已有模型會重用；中斷後重新儲存即可續傳。每次 AI 回覆後會釋放模型記憶體。</p>
       </div>
-      <div id="cfg-gemini" class="detail" hidden>
-        <label class="field"><span>Gemini 模型</span><input id="cfg-gemini-model" type="text" placeholder="gemini-2.5-flash"></label>
-        <label class="field"><span>Gemini API 金鑰</span><input id="cfg-gemini-key" type="password" autocomplete="off" placeholder="輸入新金鑰；留空保留原值"></label>
+      <div id="cfg-api" class="detail" hidden>
+        <label class="field"><span>API 供應商</span><select id="cfg-provider"><option value="openai">OpenAI</option><option value="claude">Claude（Anthropic）</option><option value="gemini">Gemini（Google）</option></select></label>
+        <div id="cfg-openai" class="detail">
+          <label class="field"><span>OpenAI 模型</span><input id="cfg-openai-model" type="text" placeholder="gpt-4.1-mini"></label>
+          <label class="field"><span>OpenAI API 金鑰</span><input id="cfg-openai-key" type="password" autocomplete="off" placeholder="輸入新金鑰；留空保留原值"></label>
+        </div>
+        <div id="cfg-claude" class="detail" hidden>
+          <label class="field"><span>Claude 模型</span><input id="cfg-claude-model" type="text" placeholder="claude-sonnet-4-6"></label>
+          <label class="field"><span>Anthropic API 金鑰</span><input id="cfg-claude-key" type="password" autocomplete="off" placeholder="輸入新金鑰；留空保留原值"></label>
+        </div>
+        <div id="cfg-gemini" class="detail" hidden>
+          <label class="field"><span>Gemini 模型</span><input id="cfg-gemini-model" type="text" placeholder="gemini-2.5-flash"></label>
+          <label class="field"><span>Gemini API 金鑰</span><input id="cfg-gemini-key" type="password" autocomplete="off" placeholder="輸入新金鑰；留空保留原值"></label>
+        </div>
+        <div id="cfg-key-status" class="hint" role="status"></div>
+        <button id="cfg-clear-api-key" class="ghost danger">清除目前供應商的已存金鑰</button>
+        <p class="hint">API 會把歌詞或練習分析傳給選定供應商，可能產生費用。訂閱網頁版不等於 API 額度。金鑰儲存在此安裝資料夾的 config.json。</p>
       </div>
-      <div id="cfg-key-status" class="hint" role="status"></div>
-      <button id="cfg-clear-api-key" class="ghost danger">清除目前供應商的已存金鑰</button>
-      <p class="hint">API 會把歌詞或練習分析傳給選定供應商，可能產生費用。訂閱網頁版不等於 API 額度。金鑰儲存在此安裝資料夾的 config.json。</p>
+      <div id="cfg-ai-progress" class="hint" role="status" aria-live="polite"></div>
+      <div id="usage" class="usage">
+        <div class="usage-head"><span>目前供應商的 AI 用量與費用</span><span class="hint">本機推論無 API 費用；API 金額未定價時顯示 —，請以供應商帳單為準</span></div>
+        <div id="usage-grid" class="usage-grid"></div>
+        <div id="usage-recent" class="usage-recent"></div>
+      </div>
     </div>
-    <div id="cfg-ai-progress" class="hint" role="status" aria-live="polite"></div>
-    <div id="usage" class="usage">
-      <div class="usage-head"><span>目前供應商的 AI 用量與費用</span><span class="hint">本機推論無 API 費用；API 金額未定價時顯示 —，請以供應商帳單為準</span></div>
-      <div id="usage-grid" class="usage-grid"></div>
-      <div id="usage-recent" class="usage-recent"></div>
-    </div>
-    <label class="field"><span>歌詞辨識模型</span>
-      <select id="cfg-whisper">
-        <option value="large-v3-turbo">large-v3-turbo（建議）</option>
-        <option value="large-v3">large-v3（最準、最慢）</option>
-        <option value="medium">medium</option>
-        <option value="small">small（最快）</option>
-      </select></label>
-    <label class="field"><span>歌詞語言</span>
-      <select id="cfg-lang">
-        <option value="">自動判斷（建議）</option><option value="zh">中文</option>
-        <option value="en">英文</option><option value="ja">日文</option><option value="ko">韓文</option>
-      </select></label>
-    <div class="field hk-field">
-      <label class="row"><input id="cfg-hotkeys" type="checkbox"> 全域快捷鍵：練唱台不在最前面時也能用（Stream Deck、巨集鍵盤可以直接綁）</label>
-      <div id="hk-list" class="hk-list"></div>
-      <span id="hk-msg" class="hint">點按鍵欄位後按下新的組合（要加 Ctrl、Alt、Shift 或 Win；F13～F24 可以單獨使用），Esc 取消。改完馬上生效，只控制桌面版視窗。</span>
-    </div>
-    <label class="row"><input id="cfg-autorec" type="checkbox"> 匯入時自動辨識歌詞（關閉時直接套用線上搜尋到的第一個版本，處理也比較快）</label>
-    <label class="row"><input id="cfg-tw" type="checkbox"> 簡體歌詞轉成繁體（只轉字形，不改用詞）</label>
-    <div class="field" id="out-field"><span>音樂輸出裝置（練唱、試聽的聲音從這裡播出）</span>
-      <select id="cfg-out"><option value="">系統預設</option></select>
-      <span class="hint">Discord「分享應用程式」分享這個桌面視窗時沒有聲音。要給朋友看畫面又聽到音樂，按下面的按鈕開一個直播分享用的練唱台視窗（外觀一樣），Discord 分享那個視窗，畫面和音樂會一起送出。</span>
-      <div><button id="open-in-browser" type="button">開啟直播分享用視窗</button></div></div>
-    <div class="field"><span>自己聽的裝置（「原唱只給我聽」用：選你的耳機）</span>
-      <select id="cfg-mon"><option value="">（未設定）</option></select>
-      <span class="hint">開啟「原唱只給我聽」後：上面的「音樂輸出裝置」只播伴奏和合音（給觀眾，OBS 收這個裝置），這裡選的裝置會多聽到原唱和導引音。兩個要選不同的裝置；只有一副耳機時，觀眾那邊可以裝免費的虛擬音效線 VB-Cable。</span></div>
-    <label class="field"><span>字體（練唱畫面、歌詞與匯出的影片／成績卡）</span>
-      <select id="cfg-font"><option value="huninn">粉圓（內建 jf open 粉圓）</option><option value="kai">楷書（歌詞楷書、介面黑體）</option><option value="sans">黑體（微軟正黑體）</option></select></label>
-    <label class="field"><span>人聲／伴奏分離品質（高品質＝BS-Roformer，伴奏殘留的人聲明顯更少，處理時間約兩倍）</span>
-      <select id="cfg-vq"><option value="auto">自動（有顯示卡用高品質）</option><option value="high">高品質（沒有顯示卡會非常慢）</option><option value="standard">標準（快）</option></select></label>
-    <div class="field"><span>已經處理過的歌</span>
-      <div><button id="cfg-upgrade" type="button">用高品質人聲模型重做全部歌曲</button></div>
-      <span class="hint">把還沒用新模型處理的歌排進佇列，重新分離人聲與伴奏、重新分析旋律；歌詞、錄音、KEY 設定都保留。排在最後、直播中會暫停，可以放著慢慢跑（有顯示卡一首約 1～2 分鐘）。</span></div>
-    <label class="row"><input id="cfg-pause-live" type="checkbox"> 直播中暫停背景處理：偵測到 OBS、VTube Studio 等直播軟體在跑，或直播模式開著時，不做分離、分析、辨識</label>
-    <label class="field"><span>人聲分離模型（標準品質用的）</span><input id="cfg-sep" type="text"></label>
-    <label class="field"><span>主唱／合音分離品質（合音多的歌，高品質的旋律會準很多）</span>
-      <select id="cfg-kq"><option value="auto">自動（有顯示卡用高品質）</option><option value="high">高品質（沒有顯示卡會非常慢）</option><option value="standard">標準（快）</option></select></label>
-    <label class="field"><span>高品質分離的速度（大量匯入時建議「快速」）</span>
-      <select id="cfg-kov"><option value="2">快速（建議，結果幾乎相同）</option><option value="4">最精細（約慢一倍）</option></select></label>
-    <label class="row"><input id="cfg-autofine" type="checkbox" checked> 合音多、需要更精細處理的歌，自動再用最精細的方式分一次（排在佇列最後，不影響其他歌的處理）</label>
-    <label class="field"><span>主唱／合音分離模型（標準）</span><input id="cfg-kara" type="text"></label>
-    <label class="field"><span>音高模型</span>
-      <select id="cfg-pitch"><option value="auto">自動（有顯示卡用 full）</option><option value="full">full（準、CPU 很慢）</option><option value="tiny">tiny（快）</option></select></label>
-    <div class="field"><span>儲存空間</span>
-      <div class="hint" id="storage-info"></div>
-      <div><button id="storage-compact" hidden>轉成 FLAC 節省空間</button></div></div>
     <div class="row">
       <button id="cfg-save" class="primary">儲存</button>
       <button id="cfg-close" class="ghost">關閉</button>

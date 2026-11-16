@@ -148,6 +148,9 @@ def _enqueue(batch, index, jobs, after=None):
             if after:
                 after(sid)
             _update(bid, index, status='done')
+        except P.JobDeferred:
+            _update(bid, index, status='queued', error=None)
+            raise
         except Exception as error:
             _update(bid, index, status='error', error=str(error))
             raise

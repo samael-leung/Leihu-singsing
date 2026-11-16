@@ -10,6 +10,10 @@ import pipeline as P
 
 
 class MelodyTests(unittest.TestCase):
+    def setUp(self):
+        worker = patch.object(P, 'IN_WORKER', True)
+        worker.start(); self.addCleanup(worker.stop)
+
     def test_short_gaps_bridge_without_filling_edges_or_real_note_changes(self):
         source=np.array([np.nan,57,np.nan,np.nan,57.5,np.nan],dtype=np.float32)
         out=P.bridge_gaps(source)
