@@ -1,11 +1,11 @@
 {
-  "tag_name": "v2.1.1",
+  "tag_name": "v2.3.1",
   "assets": [
     {
-      "name": "LeihuLiantai-windows-ai-choice-2.1.1-Update.exe",
-      "browser_download_url": "https://raw.githubusercontent.com/samael-leung/Leihu-singsing/refs/heads/leihu-song-request-sync/installer/releases/LeihuLiantai-windows-ai-choice-2.1.1-Update.exe",
-      "size": 3214022,
-      "digest": "sha256:905e55a81883c6b2f1c08d1579e6c746f8452e72ed76ea0f03054f110c4adbe0"
+      "name": "LeihuLiantai-windows-ai-choice-2.3.1-Update.exe",
+      "browser_download_url": "https://raw.githubusercontent.com/samael-leung/Leihu-singsing/refs/heads/leihu-song-request-sync/installer/releases/LeihuLiantai-windows-ai-choice-2.3.1-Update.exe",
+      "size": 3243554,
+      "digest": "sha256:692506ae56b0bbcc6758ea0f15f353c6404c978979abc8dd32394294fabdc363"
     }
   ]
 }
