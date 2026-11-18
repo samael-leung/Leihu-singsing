@@ -1082,6 +1082,9 @@ if(playlistBatchId){refreshPlaylistHistory();pollPlaylist(true);}
 
 $("#import").onchange = e => { importFiles([...e.target.files]); e.target.value = ""; };
 const drop = $("#drop");
+drop.onclick = () => $("#import").click();
+drop.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("#import").click(); } };
+
 ["dragenter", "dragover"].forEach(ev => document.addEventListener(ev, e => {
   if (!$("#view-lib").hidden && e.dataTransfer?.types?.includes("Files")) { e.preventDefault(); drop.classList.add("over"); }
 }));
@@ -3904,6 +3907,8 @@ async function openSettings(focusUsage) {
   $("#cfg-vq").value = cfg.vocal_quality || "auto";
   $("#cfg-pause-live").checked = cfg.pause_while_streaming !== false;
   $("#cfg-parallel").checked = !!cfg.parallel_separation;
+  $("#cfg-parallel-note").textContent = st.parallel_ok === false
+    ? (st.vram ? `這台電腦的顯示卡記憶體是 ${(st.vram / 1073741824).toFixed(0)} GB，不到 10 GB，建議一次處理一首；仍可手動啟用，記憶體不足時會退回一次一首。` : "建議使用 10 GB 以上記憶體的顯示卡；仍可手動啟用，記憶體不足時會退回一次一首。") : "";
   $("#cfg-kov").value = String(cfg.karaoke_overlap === 4 ? 4 : 2);
   $("#cfg-autofine").checked = cfg.auto_fine !== false;
   $("#cfg-pitch").value = cfg.pitch_model;

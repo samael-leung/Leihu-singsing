@@ -172,7 +172,7 @@ def gpu_info(block: bool = True) -> dict | None:
     cache = MODELS / "gpu_probe.json"
     try:
         c = json.loads(cache.read_text("utf-8"))
-        if c.get("torch") == tv:
+        if c.get("torch") == tv and (not c.get("ok") or "vram" in c):   # 舊的紀錄沒有記憶體大小：重新檢查一次
             _GPU_INFO = c
             CUDA_NOTE = c.get("note") or ""
             return c
@@ -3161,6 +3161,15 @@ def live_light_cfg(cfg: dict) -> dict | None:
 PIPELINE_LABELS = {"all", "youtube", "upgrade", "fine", "max"}
 
 
+PARALLEL_MIN_VRAM = 10e9   # 2.3.1：顯示卡記憶體 10 GB 以上才同時分離兩首
+
+
+def parallel_ok() -> bool:
+    """顯存是否足以建議兩首同時分離；整合版保留使用者原有的手動選擇。"""
+    info = gpu_info(block=False) or {}
+    return bool(info.get("ok")) and (info.get("vram") or 0) >= PARALLEL_MIN_VRAM
+
+
 class Jobs:
     """重工作的佇列。預設一次分離一首；分離完的那首在分析旋律、存檔時，下一首可以先開始分離（pipeline）。
     設定開啟「閒置時兩首同時分離」且沒在直播時，最多兩首同時分離。"""
@@ -3651,7 +3660,7 @@ def similarity(recognized: str, candidate: str) -> float | None:
     return round(sum(x.size for x in m.get_matching_blocks()) / len(a), 3)
 
 
-USER_AGENT = "LeihuLiantai/2.3.1 (+https://github.com/samael-leung/Leihu-singsing)"   # HTTP 標頭只能用英文字
+USER_AGENT = "LeihuLiantai/2.3.2 (+https://github.com/samael-leung/Leihu-singsing)"   # HTTP 標頭只能用英文字
 
 
 def _http_json(url: str, headers: dict | None = None, timeout: int = 8):

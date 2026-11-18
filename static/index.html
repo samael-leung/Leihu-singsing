@@ -8,7 +8,7 @@
 </head>
 <body>
 <header class="bar">
-  <span class="logo">雷虎練唱台<small id="ver">2.3.1</small></span>
+  <span class="logo">雷虎練唱台<small id="ver">2.3.2</small></span>
   <nav class="row">
     <button id="nav-lib" class="tab cur">歌曲庫</button>
     <button id="nav-practice" class="tab" disabled>練唱</button>
@@ -33,7 +33,7 @@
   <section id="view-lib">
     <div class="lib-head">
       <h1>歌曲庫</h1>
-      <label class="btn primary">匯入歌曲<input type="file" id="import" accept="audio/*,.mp3,.wav,.flac,.ogg,.m4a" multiple hidden></label>
+      <label class="btn primary">音訊匯入<input type="file" id="import" accept="audio/*,.mp3,.wav,.flac,.ogg,.m4a,.aac,.opus,.wma" multiple hidden></label>
       <button id="export-open" type="button">匯出歌單</button>
       <button id="lib-setlist" type="button" title="這段時間唱過的歌，也能回顧過去的場次、產生 YouTube 章節">直播歌單</button>
       <span class="hint">處理都在這台電腦上進行，第一次使用各模型時需要連網下載。</span>
@@ -64,7 +64,9 @@
       </div>
       <p class="hint">每次列出最多 200 首，勾選後逐首下載、分軌及分析。一首失敗不影響後續歌曲；已存在的歌曲會略過。僅適用可存取的清單與影片，私人／已刪除項目可能無法下載。</p>
     </details>
-    <div id="drop" class="drop">把音訊檔拖到這裡。匯入後會自動分離主唱、合音、伴奏，分析旋律並辨識歌詞。</div>
+    <div id="drop" class="drop" role="button" tabindex="0" aria-label="音訊匯入：選擇音訊檔">
+      <b>音訊匯入</b>：點這裡選擇音訊檔，或把檔案拖進來（可以一次多首）
+      <span class="hint">支援 MP3、WAV、FLAC、OGG、M4A、AAC、OPUS、WMA。匯入後會自動分離主唱、合音、伴奏，分析旋律並套用歌詞。</span></div>
     <div id="jobs-bar" class="row jobs-bar" hidden>
       <span id="jobs-sum" class="hint"></span><span class="spacer"></span>
       <button id="jobs-pause" class="ghost" title="處理中的那首在下一個進度點停下、讓出顯示卡；錄音評分、KEY 轉換照常（Ctrl+Alt+P）">全部暫停</button>
@@ -563,7 +565,7 @@
       <label class="row"><input type="radio" name="ex-fmt" value="html" checked> 網頁：給觀眾看，可以搜尋、依分類切換</label>
       <label class="row"><input type="radio" name="ex-fmt" value="xlsx"> Excel（.xlsx）：可以自己排版、篩選</label>
       <label class="row"><input type="radio" name="ex-fmt" value="csv"> 練唱台歌單（.csv）：備份、換電腦用</label>
-      <span class="hint">網頁檔可以直接傳到 Discord 或放上網路空間，點開就能看。練唱台歌單可以在「批次加入」匯回，會依 YouTube 網址自動重新下載。</span></div>
+      <span class="hint">網頁檔可以直接傳到 Discord 或放上網路空間，點開就能看。<span>練唱台歌單可以在「批次加入」匯回，會依 YouTube 網址自動重新下載。</span></span></div>
     <label class="field" id="ex-title-f"><span>標題</span><input id="ex-title" type="text" maxlength="60" placeholder="點歌清單"></label>
     <div class="field"><span>範圍</span>
       <label class="row"><input type="radio" name="ex-scope" value="all" checked> 全部分類</label>
@@ -644,7 +646,7 @@
       <label class="field"><span>高品質分離的速度（大量匯入時建議「快速」）</span>
         <select id="cfg-kov"><option value="2">快速（建議，結果幾乎相同）</option><option value="4">最精細（約慢一倍）</option></select></label>
       <label class="row"><input id="cfg-autofine" type="checkbox" checked> 合音多、需要更精細處理的歌，自動再用最精細的方式分一次（排在佇列最後，不影響其他歌的處理）</label>
-      <label class="row"><input id="cfg-parallel" type="checkbox"> 閒置時兩首同時分離（實驗性）：沒在直播時，大量匯入或升級可以再快約兩到四成；顯示卡記憶體 10 GB 以上才建議開，不夠時會自動退回一次一首</label>
+      <label class="row"><input id="cfg-parallel" type="checkbox"> 閒置時兩首同時分離（實驗性）：沒在直播時，大量匯入或升級可以再快約兩到四成；建議顯示卡記憶體 10 GB 以上，仍可手動啟用 <span id="cfg-parallel-note" class="hint"></span></label>
       <div class="field"><span>已經處理過的歌</span>
         <div><button id="cfg-upgrade" type="button">用高品質人聲模型重做全部歌曲</button></div>
         <span class="hint">把還沒用新模型處理的歌排進佇列，重新分離人聲與伴奏、重新分析旋律；歌詞、錄音、KEY 設定都保留。排在最後、直播中會暫停，可以放著慢慢跑（有顯示卡一首約 1～2 分鐘）。</span></div>

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import math
+import logging
 import os
 import re
 import shutil
@@ -28,7 +29,7 @@ import score_sheet as SS   # 1.7：旋律譜匯出
 import exporter as EX      # 2.3.0：匯出歌單、直播歌單回顧
 import hotkeys as HK   # 2.0：自訂全域快捷鍵
 
-VERSION = "2.3.1"
+VERSION = "2.3.2"
 HOST, PORT = "127.0.0.1", int(os.environ.get("LIANTAI_PORT", "8765"))
 app = Flask(__name__, static_folder=str(P.ROOT / "static"), static_url_path="/static")
 app.config["MAX_CONTENT_LENGTH"] = 1024 * 1024 * 1024
@@ -60,6 +61,19 @@ def index():
     return send_from_directory(app.static_folder, "index.html")
 
 
+class _QuietPolls(logging.Filter):
+    """畫面每 1～5 秒會來問一次狀態，這些成功的例行請求不寫進 logs/app.log（不然一個月就幾十 MB，
+    也蓋掉真正有用的訊息）。失敗的照樣記。"""
+    QUIET = ('"GET /api/status', '"GET /api/overlay', '"GET /api/hotkeys/', '"GET /static/')
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        return not (any(q in msg for q in self.QUIET) and ('" 200 ' in msg or '" 304 ' in msg))
+
+
+logging.getLogger("werkzeug").addFilter(_QuietPolls())
+
+
 # ---------------------------------------------------------------- 狀態與設定
 
 @app.get("/api/status")
@@ -76,6 +90,7 @@ def status():
     live["holding"] = jobs.holding
     live["paused"] = jobs.paused
     return jsonify(version=VERSION, root=str(P.ROOT), modules=mods, cuda_note=P.CUDA_NOTE, hq=hq,
+                   vram=(P.gpu_info(block=False) or {}).get("vram"), parallel_ok=P.parallel_ok(), yt=True,
                    hq_model=P.HQ_KARAOKE, hqv=hqv, live=live,
                    ai_ready=C.ready(), ai_provider=C.provider(),
                    session_cost=C.summary()["session"]["cost_usd"],
@@ -133,7 +148,7 @@ def _local_only():
         if origin and origin.rstrip("/").lower() not in (f"http://127.0.0.1:{PORT}", f"http://localhost:{PORT}"):
             abort(403)
         # 2.3.0 搬移歌曲庫中：會寫進歌曲庫的操作先擋住（不然搬完會少掉這段時間的修改）
-        if P.STORAGE["moving"] and request.path.startswith(MOVE_BLOCK):
+        if P.STORAGE["moving"] and request.method != "GET" and request.path.startswith(MOVE_BLOCK):
             raise P.UserError("正在搬移歌曲庫，搬完才能操作歌曲（大約幾分鐘，進度在處理清單）")
 
 
