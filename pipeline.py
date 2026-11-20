@@ -1780,6 +1780,150 @@ def harmony_ratio(d: Path) -> float | None:
     return round(float(np.sqrt(np.sum(br[voiced] ** 2) / np.sum(lr[voiced] ** 2))), 3)
 
 
+LEAD_FIX_V = 2   # 主唱補回的判斷方式版本：改了判斷方式就加一，舊歌會重新檢查一次
+SPLIT_NOTE = "主唱和合音可能沒分好"
+
+
+def _lyric_spans(d: Path) -> list[tuple[float, float]]:
+    """有時間的歌詞句子（開始、結束秒數）；整句括號的（和聲、旁白）不算。每句最多算 8 秒。"""
+    p = d / "lyrics.lrc"
+    if not p.exists():
+        return []
+    try:
+        rows = [r for r in parse_lrc(p.read_text(encoding="utf-8", errors="ignore")) if r["t"] is not None]
+    except Exception:
+        return []
+    out = []
+    for i, r in enumerate(rows):
+        tx = r["text"].strip()
+        if not tx or re.fullmatch(r"[（(].*[)）]", tx) or ":" in tx[:8] or "：" in tx[:8]:
+            continue   # 空白、整句括號、「作詞：」這類資訊行
+        end = rows[i + 1]["t"] if i + 1 < len(rows) else r["t"] + 5
+        end = min(end, r["t"] + 8)
+        if end - r["t"] >= 1.0:
+            out.append((r["t"], end))
+    return out
+
+
+def _lead_gap_gain(lead_m: np.ndarray, back_m: np.ndarray, sr: int,
+                   spans: list[tuple[float, float]] | None = None) -> tuple[np.ndarray | None, float, dict]:
+    """找出主唱被分到合音的地方，回傳（每個樣本要搬回主唱的比例 0～1、搬了幾秒、統計）。
+    1. 「主唱幾乎沒聲音、合音卻很大聲」持續 8 秒以上（整段疊錄的副歌，例如〈牛仔很忙〉）。
+    2. 有時間歌詞時，再逐句看：明明在唱歌詞，主唱卻幾乎整句沒聲音、合音很大聲 → 那句搬回主唱
+       （對唱、多人輪流唱的歌，常常一兩句被分到合音）。
+    短短幾秒、又不在歌詞句子裡的，通常是真的合音（間奏和聲、前奏哼唱），不動。
+    統計裡 weak 是「主唱有聲音、但比合音小很多」的句數：這種沒辦法整句搬，只提醒。"""
+    stats = {"lines": 0, "moved_lines": 0, "weak": 0}
+    H = sr // 10
+    n = min(len(lead_m), len(back_m)) // H * H
+    if n < H * 50:
+        return None, 0.0, stats
+    lr = np.sqrt(np.mean(lead_m[:n].reshape(-1, H) ** 2, axis=1))
+    br = np.sqrt(np.mean(back_m[:n].reshape(-1, H) ** 2, axis=1))
+    k = np.ones(15) / 15   # 1.5 秒平滑：一個字、一口氣的空檔不算
+    ls = np.sqrt(np.convolve(lr ** 2, k, "same"))
+    bs = np.sqrt(np.convolve(br ** 2, k, "same"))
+    ref = float(np.percentile(np.maximum(ls, bs), 95))
+    if ref <= 1e-5:
+        return None, 0.0, stats
+    blk = np.zeros(len(ls), dtype=np.float32)
+    cand = (bs > 0.12 * ref) & (ls < 0.1 * bs)
+    i = 0
+    while i < len(cand):
+        if not cand[i]:
+            i += 1
+            continue
+        j = i
+        while j < len(cand) and cand[j]:
+            j += 1
+        if j - i >= 80:
+            blk[max(0, i - 3):min(len(cand), j + 3)] = 1.0   # 前後各多 0.3 秒，接縫不會吃字
+        i = j
+    if spans:
+        k2 = np.ones(5) / 5   # 逐句用 0.5 秒平滑
+        ls2 = np.sqrt(np.convolve(lr ** 2, k2, "same"))
+        bs2 = np.sqrt(np.convolve(br ** 2, k2, "same"))
+        for st, en in spans:
+            a, z = int(st * 10), int(en * 10)
+            if z > len(ls2) or z - a < 10:
+                continue
+            act = np.maximum(ls2[a:z], bs2[a:z]) > 0.1 * ref
+            if act.sum() < 10:   # 這句幾乎沒唱到（歌詞時間不準或間奏）
+                continue
+            stats["lines"] += 1
+            miss = float(((ls2[a:z] < 0.1 * bs2[a:z]) & act).sum() / act.sum())
+            weak = float(((ls2[a:z] < 0.5 * bs2[a:z]) & act).sum() / act.sum())
+            if miss >= 0.8:
+                stats["moved_lines"] += 1
+                blk[max(0, a - 2):min(len(blk), z + 2)] = 1.0
+            elif weak >= 0.6:
+                stats["weak"] += 1
+    sec = float(blk.sum()) / 10
+    if sec < 1.0:
+        return None, 0.0, stats
+    fade = np.convolve(blk, np.ones(3) / 3, "same")   # 0.3 秒淡入淡出
+    g = np.interp(np.arange(len(lead_m)), np.arange(len(fade)) * H + H / 2, fade).astype(np.float32)
+    return g, sec, stats
+
+
+def _split_note(d: Path, stats: dict) -> None:
+    """很多句「主唱比合音小很多」：沒辦法自動整句搬，提醒使用者可以怎麼處理。"""
+    with _META_LOCK:
+        meta = read_meta(d)
+        notes = [x for x in meta.get("notes", []) if SPLIT_NOTE not in x]
+        if stats["lines"] >= 6 and stats["weak"] >= max(3, 0.25 * stats["lines"]):
+            notes.append(f"{SPLIT_NOTE}：有 {stats['weak']} 句主唱聲音很小、合音很大（疊錄、對唱或多人合唱的歌常見）。"
+                         "可以試「用最高品質人聲分離重新辨識」；多人輪流唱的歌可以開「合唱模式」")
+        meta["notes"] = notes
+        meta["split_suspect"] = stats["weak"]
+        write_meta(d, meta)
+
+
+def fix_lead_gaps(d: Path) -> float:
+    """主唱被誤分到合音的段落、句子搬回主唱（合音那段同時拿掉）。回傳搬了幾秒；沒有就不改檔。"""
+    lp, bp = stem_path(d, "lead"), stem_path(d, "back")
+    if not lp.exists() or not bp.exists():
+        return 0.0
+    lead, back = read_audio(lp), read_audio(bp)
+    n = min(lead.shape[-1], back.shape[-1])
+    lead, back = lead[..., :n], back[..., :n]
+    g, sec, stats = _lead_gap_gain(lead.mean(axis=0), back.mean(axis=0), SR, _lyric_spans(d))
+    if g is not None:
+        save_stem(d, "lead", lead + back * g)
+        save_stem(d, "back", back * (1 - g))
+        print(f"[separate] 主唱有 {sec:.0f} 秒（{stats['moved_lines']} 句歌詞）被分到合音，已搬回主唱", flush=True)
+    _split_note(d, stats)
+    update_meta(d, lead_fix=LEAD_FIX_V, lead_fix_sec=round(sec, 1), lead_fix_lrc=_lrc_stamp(d))
+    return sec
+
+
+def lead_fix_job(song_id: str, after=None):
+    """舊歌：主唱被分到合音的段落搬回主唱，再重新分析旋律（不用重新分離）。"""
+    def run(report):
+        d = song_dir(song_id)
+        report("檢查主唱有沒有被分到合音", 0.05)
+        if fix_lead_gaps(d) > 0:
+            step_pitch(d, load_config(), report)
+            if after:
+                after(song_id)
+    return run
+
+
+def _lrc_stamp(d: Path) -> float:
+    p = d / "lyrics.lrc"
+    return round(p.stat().st_mtime, 1) if p.exists() else 0.0
+
+
+def lead_fix_needed(meta: dict) -> bool:
+    """還沒用目前的判斷方式檢查過，或檢查之後歌詞換過（逐句檢查要用新的歌詞時間）。"""
+    stp = meta.get("steps") or {}
+    if not (stp.get("separate") and meta.get("separation") == "uvr" and meta.get("id")):
+        return False
+    if meta.get("lead_fix") != LEAD_FIX_V:
+        return True
+    return meta.get("lead_fix_lrc", 0.0) != _lrc_stamp(song_dir(meta["id"]))
+
+
 def fine_job(song_id: str, after=None):
     """精細處理：用最精細的設定（重疊 4 次）重新分主唱與合音，再重新分析旋律。歌詞、錄音不變。"""
     def run(report):
@@ -1903,28 +2047,30 @@ def _dl_report(report, label: str, frac: float):
 
 
 def _separate(model: str, inp: Path, tmp: Path, overlap: int, autocast: bool,
-              label: str, report, start: float, span: float) -> list[Path]:
+              label: str, report, start: float, span: float, cpu: bool = False) -> list[Path]:
     """用一個分離模型分一次（2.1.1：在顯示卡子程式裡跑，主程式不載入 CUDA）。"""
     import gpu_worker as G
-    outs = G.call("separate", model, str(inp), str(tmp), overlap, autocast, label, start, span, progress=report)
+    outs = G.call("separate", model, str(inp), str(tmp), overlap, autocast, label, start, span, progress=report, cpu=cpu)
     return [Path(p) for p in outs]
 
 
 def separate_uvr(d: Path, cfg: dict, report) -> None:
+    import gpu_worker as G
     tmp = d / "_sep"
     shutil.rmtree(tmp, ignore_errors=True)
     tmp.mkdir()
     (MODELS / "uvr").mkdir(parents=True, exist_ok=True)
     overlap = 4 if cfg.get("karaoke_overlap") == 4 else 2
-    autocast = _autocast_ok()
+    cpu = bool(cfg.get("_cpu"))   # 直播中：只用 CPU
+    autocast = False if cpu else _autocast_ok()
 
     report("準備人聲分離模型", 0.07)
     vmodel = vocal_model(cfg)
     vhq = vmodel == HQ_VOCAL
     ensure_model(vmodel, _dl_report(report, "人聲分離模型", 0.07))
-    vlabel = "分離人聲與伴奏" + ("（高品質）" if vhq else "（高品質模型下載中，這首先用標準模型）" if HQV_DL["state"] == "downloading" else "")
+    vlabel = "分離人聲與伴奏" + ("（直播中：CPU 輕量處理，下播後自動補做高品質）" if cpu else "") + ("（高品質）" if vhq else "（高品質模型下載中，這首先用標準模型）" if HQV_DL["state"] == "downloading" else "")
     report(vlabel, 0.08)
-    outs = _separate(vmodel, stem_path(d, "mix"), tmp, overlap, autocast, vlabel, report, 0.08, 0.26)
+    outs = _separate(vmodel, stem_path(d, "mix"), tmp, overlap, autocast, vlabel, report, 0.08, 0.26, cpu)
     update_meta(d, vocal_model="bs_roformer" if vhq else "mdx")   # 之後可以找出還沒用新模型處理的歌
     voc = tmp / "vocals_only.wav"
     _pick(outs, "vocals").replace(voc)
@@ -1939,12 +2085,12 @@ def separate_uvr(d: Path, cfg: dict, report) -> None:
     report(label, 0.35)
 
     def run_kara(kara, label, ac):
-        outs = _separate(kara, voc, tmp, overlap, ac, label, report, 0.35, 0.18)
+        outs = _separate(kara, voc, tmp, overlap, ac, label, report, 0.35, 0.18, cpu)
         return [p for p in outs if p != voc and p != inst_p]
     try:
         try:
             outs2 = run_kara(kara, label, autocast)
-        except JobCancelled:
+        except (JobCancelled, G.GpuStalled):
             raise
         except Exception as e:
             if not (hq and autocast) or "out of memory" in str(e).lower():
@@ -1953,7 +2099,7 @@ def separate_uvr(d: Path, cfg: dict, report) -> None:
             _AUTOCAST["bad"] = True
             log_error("autocast separation", e)
             outs2 = run_kara(kara, label, False)
-    except JobCancelled:
+    except (JobCancelled, G.GpuStalled):
         raise
     except Exception as e:
         if not hq:
@@ -1975,6 +2121,10 @@ def separate_uvr(d: Path, cfg: dict, report) -> None:
     for name, p in (("lead", lead_p), ("back", back_p), ("inst", inst_p)):
         save_stem(d, name, fit_length(read_audio(p), n))
     shutil.rmtree(tmp, ignore_errors=True)
+    try:
+        fix_lead_gaps(d)   # 2.3.2：疊錄的副歌被整段分到合音 → 搬回主唱
+    except Exception as e:
+        log_error("fix_lead_gaps", e)
     # 合音比重：合音越多，主唱和合音越難分乾淨，更精細的分離越有幫助
     try:
         h = harmony_ratio(d)
@@ -2037,8 +2187,20 @@ def step_separate(d: Path, cfg: dict, report) -> None:
     method = "dsp"
     if module_status()["uvr"]:
         try:
-            separate_uvr(d, cfg, report)
+            try:
+                separate_uvr(d, cfg, report)
+            except Exception as e:
+                if type(e).__name__ != "GpuStalled" or cfg.get("_cpu"):
+                    raise
+                # 2.3.2：顯示卡被其他程式佔滿、分離沒有進度 → 改用 CPU＋標準模型重做，之後自動補做高品質
+                print("[gpu] 顯示卡太忙，這首改用 CPU＋標準模型分離（之後自動補做高品質）", flush=True)
+                cfg = dict(cfg, **LIGHT_CFG)
+                update_meta(d, live_light=True)
+                report("顯示卡太忙：改用 CPU 輕量處理（之後自動補做高品質）", 0.08)
+                separate_uvr(d, cfg, report)
             method = "uvr"
+        except JobCancelled:
+            raise
         except Exception as e:
             traceback.print_exc()
             notes.append(f"AI 分離失敗，改用聲像分離：{e}")
@@ -2066,7 +2228,11 @@ def track_pitch(y16: np.ndarray, cfg: dict | None = None, strict: bool = False) 
     cfg = cfg or load_config()
     if not IN_WORKER and module_status()["crepe"]:
         import gpu_worker as G
-        return G.call("pitch", np.ascontiguousarray(y16, dtype=np.float32), cfg, strict)
+        # 直播中（含錄音評分）：在只用 CPU 的處理程式裡分析，不跟直播軟體、VTube Studio 搶顯示卡
+        cpu = bool(cfg.get("_cpu")) or bool(live_status(cfg)["hold"])
+        if strict and not cpu and not parallel_ok() and G._GPU_GATE.locked():
+            cpu = True   # 錄音評分不要等顯示卡上的分離做完：先用 CPU 分析
+        return G.call("pitch", np.ascontiguousarray(y16, dtype=np.float32), cfg, strict, cpu=cpu)
     return _track_pitch_local(y16, cfg, strict)
 
 
@@ -3082,17 +3248,121 @@ LIVE_HOLD = {"apps": [], "live_seen": 0.0, "override_until": 0.0, "checked": 0.0
 _live_lock = threading.Lock()
 
 
-def _running_apps(names: list[str]) -> list[str]:
+def _process_names() -> set[str] | None:
+    """目前所有程式的執行檔名稱（小寫）。2.3.2：直接問 Windows（不到 0.1 秒），
+    不再用 tasklist：電腦很忙時 tasklist 會超過 10 秒逾時，結果「沒偵測到直播」。"""
+    try:
+        import ctypes
+        from ctypes import wintypes
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+        class PE(ctypes.Structure):
+            _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD),
+                        ("th32ProcessID", wintypes.DWORD), ("th32DefaultHeapID", ctypes.c_size_t),
+                        ("th32ModuleID", wintypes.DWORD), ("cntThreads", wintypes.DWORD),
+                        ("th32ParentProcessID", wintypes.DWORD), ("pcPriClassBase", ctypes.c_long),
+                        ("dwFlags", wintypes.DWORD), ("szExeFile", ctypes.c_wchar * 260)]
+        k32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+        k32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+        k32.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.POINTER(PE)]
+        k32.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.POINTER(PE)]
+        k32.CloseHandle.argtypes = [wintypes.HANDLE]
+        snap = k32.CreateToolhelp32Snapshot(0x2, 0)
+        if not snap or snap == wintypes.HANDLE(-1).value:
+            return None
+        try:
+            e = PE()
+            e.dwSize = ctypes.sizeof(PE)
+            out = set()
+            ok = k32.Process32FirstW(snap, ctypes.byref(e))
+            while ok:
+                out.add(e.szExeFile.lower())
+                ok = k32.Process32NextW(snap, ctypes.byref(e))
+            return out
+        finally:
+            k32.CloseHandle(snap)
+    except Exception:
+        return None
+
+
+def _running_apps(names: list[str]) -> list[str] | None:
+    """有在跑的直播軟體；查不到（不是「沒有」）時回傳 None，沿用上一次的結果。"""
     if sys.platform != "win32" or not names:
         return []
+    procs = _process_names()
+    how = "Windows API" if procs is not None else "tasklist"
+    if _LIVE_LAST.get("how") != how:
+        _LIVE_LAST["how"] = how
+        print(f"[live] 直播軟體偵測方式：{how}", flush=True)
+    if procs is None:
+        try:
+            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            out = subprocess.run(["tasklist", "/FO", "CSV", "/NH"], capture_output=True, text=True,
+                                 timeout=20, creationflags=flags, encoding="utf-8", errors="ignore").stdout
+        except Exception:
+            return None
+        low = out.lower()
+        return [n for n in names if f'"{n.lower()}"' in low]
+    return [n for n in names if n.lower() in procs]
+
+
+# 2.3.2：顯示卡被其他程式（直播軟體、VTube Studio、遊戲、錄影）佔滿時，也不要再把重工作丟給顯示卡：
+# 顯示卡記憶體不夠時 Windows 會把它搬到系統記憶體，分離慢幾十倍、整台電腦跟著卡。
+GPU_LOAD = {"checked": 0.0, "free": None, "total": None, "util": None, "hot": 0, "stalled_until": 0.0}
+GPU_MIN_FREE = 3.5e9    # 剩下的顯示卡記憶體少於這個就不用顯示卡分離
+GPU_BUSY_UTIL = 85      # 其他程式已經把顯示卡用到這麼滿（連續兩次）也不用
+
+
+def gpu_stalled_mark(seconds: float = 300) -> None:
+    """顯示卡處理程式剛剛卡住：接下來一段時間先當作顯示卡很忙。"""
+    GPU_LOAD["stalled_until"] = time.time() + seconds
+
+
+def _sample_gpu_load() -> None:
+    """用 nvidia-smi 看整張顯示卡（含其他程式）的用量。練唱台自己的顯示卡處理程式開著時不看（會算到自己）。"""
+    try:
+        import gpu_worker as G
+        if G.POOL.count():
+            return
+    except Exception:
+        pass
     try:
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        out = subprocess.run(["tasklist", "/FO", "CSV", "/NH"], capture_output=True, text=True,
-                             timeout=10, creationflags=flags, encoding="utf-8", errors="ignore").stdout
+        out = subprocess.run(["nvidia-smi", "--query-gpu=memory.used,memory.total,utilization.gpu",
+                              "--format=csv,noheader,nounits"], capture_output=True, text=True,
+                             timeout=8, creationflags=flags).stdout.strip().splitlines()
+        used, total, util = (float(x) for x in out[0].split(","))
     except Exception:
-        return []
-    low = out.lower()
-    return [n for n in names if f'"{n.lower()}"' in low]
+        return
+    GPU_LOAD.update(free=(total - used) * 2**20, total=total * 2**20, util=util,
+                    hot=GPU_LOAD["hot"] + 1 if util >= GPU_BUSY_UTIL else 0)
+
+
+def gpu_busy_reason() -> str:
+    now = time.time()
+    if now < GPU_LOAD["stalled_until"]:
+        return "顯示卡剛剛處理沒有進度（可能被其他程式佔滿）"
+    if now - GPU_LOAD["checked"] > 20:
+        GPU_LOAD["checked"] = now
+        _sample_gpu_load()
+    free = GPU_LOAD["free"]
+    if free is not None and free < GPU_MIN_FREE:
+        return f"顯示卡記憶體只剩 {free / 1e9:.1f} GB（被其他程式佔用）"
+    if GPU_LOAD["hot"] >= 2:
+        return f"顯示卡已被其他程式用到 {GPU_LOAD['util']:.0f}%"
+    return ""
+
+
+_LIVE_LAST = {"reason": None}
+
+
+def _live_log(st: dict) -> dict:
+    r = st.get("reason") or ""
+    key = ("gpu" if st.get("gpu") else r)   # 顯示卡用量的數字每次都不一樣，只在狀態改變時記
+    if key != _LIVE_LAST["reason"]:
+        _LIVE_LAST["reason"] = key
+        print(f"[live] {r}：新的分離、音高分析改用 CPU，背景工作暫停" if r else "[live] 沒有偵測到直播或顯示卡忙碌：恢復正常處理", flush=True)
+    return st
 
 
 def live_touch() -> None:
@@ -3106,28 +3376,32 @@ def live_override(seconds: float = 3600) -> None:
 
 
 def live_status(cfg: dict | None = None) -> dict:
-    """現在該不該暫停重工作，以及原因（給狀態列顯示）。每 15 秒才真的去查一次程式清單。"""
+    """現在該不該暫停重工作，以及原因（給狀態列顯示）。每 15 秒才真的去查一次程式清單。
+    2.3.2：顯示卡被其他程式佔滿時也算（不管有沒有開「直播中暫停背景處理」）。"""
     cfg = cfg or load_config()
     now = time.time()
-    if not cfg.get("pause_while_streaming", True):
-        return {"hold": False, "reason": "", "apps": []}
     if now < LIVE_HOLD["override_until"]:
-        return {"hold": False, "reason": "", "apps": [], "override": True}
-    with _live_lock:
-        if now - LIVE_HOLD["checked"] > 15:
-            LIVE_HOLD["checked"] = now
-            LIVE_HOLD["apps"] = _running_apps(cfg.get("streaming_apps") or [])
-    apps = list(LIVE_HOLD["apps"])
-    live = now - LIVE_HOLD["live_seen"] < 20
-    if apps:
-        return {"hold": True, "reason": "偵測到 " + "、".join(a.rsplit(".", 1)[0] for a in apps), "apps": apps}
-    if live:
-        return {"hold": True, "reason": "直播模式開著", "apps": []}
-    return {"hold": False, "reason": "", "apps": []}
+        return _live_log({"hold": False, "reason": "", "apps": [], "override": True})
+    if cfg.get("pause_while_streaming", True):
+        with _live_lock:
+            if now - LIVE_HOLD["checked"] > 15:
+                LIVE_HOLD["checked"] = now
+                got = _running_apps(cfg.get("streaming_apps") or [])
+                if got is not None:
+                    LIVE_HOLD["apps"] = got
+        apps = list(LIVE_HOLD["apps"])
+        if apps:
+            return _live_log({"hold": True, "reason": "偵測到 " + "、".join(a.rsplit(".", 1)[0] for a in apps), "apps": apps})
+        if now - LIVE_HOLD["live_seen"] < 20:
+            return _live_log({"hold": True, "reason": "直播模式開著", "apps": []})
+    busy = gpu_busy_reason()
+    if busy:
+        return _live_log({"hold": True, "reason": busy, "apps": [], "gpu": True})
+    return _live_log({"hold": False, "reason": "", "apps": []})
 
 
 # 直播中要先停住的背景工作（使用者沒有在等結果的）
-LIVE_BACKGROUND = {"upgrade", "fine", "compact", "max"}
+LIVE_BACKGROUND = {"upgrade", "fine", "compact", "max", "leadfix"}
 
 
 class JobDeferred(JobCancelled):
@@ -3150,11 +3424,14 @@ def hq_models_ready(cfg: dict) -> bool:
     return (not hq("vocal_quality") or hqv_ready()) and (not hq("karaoke_quality") or hq_ready())
 
 
+LIGHT_CFG = {"vocal_quality": "standard", "karaoke_quality": "standard", "auto_recognize_lyrics": False, "_cpu": True}
+
+
 def live_light_cfg(cfg: dict) -> dict | None:
-    """直播中匯入：回傳要改用的輕量設定；不在直播或本來就用標準模型時回傳 None。"""
-    if not live_status(cfg)["hold"] or not wants_hq(cfg):
+    """直播中（或顯示卡被其他程式佔滿）：回傳要改用的輕量設定（CPU＋標準模型）；否則 None。"""
+    if not live_status(cfg)["hold"]:
         return None
-    return {"vocal_quality": "standard", "karaoke_quality": "standard", "auto_recognize_lyrics": False}
+    return dict(LIGHT_CFG)
 
 
 # 2.1.1：可以和下一首重疊處理的工作（分離完、還在分析旋律時，下一首就先開始分離）
@@ -3493,8 +3770,16 @@ def process_song(song_id: str, steps: list[str], cfg_override: dict | None = Non
         fit_before = lyrics_timing_fit(d) if recheck else None   # 重新分離前，歌詞和舊的歌聲位置吻合度
         if "import" in steps or not meta["steps"].get("import"):
             step_import(d, report)
+        # 2.3.2：匯入時（不自動辨識）先上網抓歌詞，和分離同時進行；分離完先套用歌詞，
+        # 再用歌詞逐句檢查主唱有沒有被分到合音、搬回來，最後才分析旋律——一次做好，不用事後再補一輪。
+        early = None
+        if ("lyrics" in steps and "import" in steps and "separate" in steps
+                and not cfg.get("auto_recognize_lyrics", False)
+                and not (d / "lyrics.lrc").exists() and not meta.get("lyrics_source")):
+            early = _early_lyrics(read_meta(d))
         if "separate" in steps:
-            light = live_light_cfg(cfg) if "import" in steps else None
+            # 2.3.2：直播中不管是匯入、優先處理或重新處理，都改用 CPU＋標準模型（不碰顯示卡），下播後自動補做
+            light = live_light_cfg(cfg)
             if light:   # 直播中匯入：先用輕量模型，直播結束後自動補做高品質
                 cfg.update(light)
                 update_meta(d, live_light=True)
@@ -3506,6 +3791,8 @@ def process_song(song_id: str, steps: list[str], cfg_override: dict | None = Non
             if not recognize:   # 接下來只剩分析旋律、存檔：下一首可以先開始分離
                 getattr(report, "gpu_done", lambda: None)()
             measure_stem_loudness(d)   # 各音軌響度，播放時依開著的音軌調整音量
+        if early is not None:
+            early = _apply_early_lyrics(d, cfg, early, report)
         if "pitch" in steps:
             step_pitch(d, cfg, report)
         if recheck:
@@ -3513,7 +3800,9 @@ def process_song(song_id: str, steps: list[str], cfg_override: dict | None = Non
                 check_lyrics_after_reseparate(d, fit_before)
             except Exception as e:
                 log_error("check_lyrics_after_reseparate", e)
-        if "lyrics" in steps and "import" in steps and not cfg.get("auto_recognize_lyrics", False):
+        if early:
+            pass   # 歌詞已經在分離後套用（或確定找不到），不用再排背景搜尋
+        elif "lyrics" in steps and "import" in steps and not cfg.get("auto_recognize_lyrics", False):
             # 1.6.5：匯入時預設不自動辨識（準度不穩、又佔顯示卡），直接套用線上搜尋到的第一個版本
             report("排入線上歌詞搜尋（背景進行）", 0.97)
             with _META_LOCK:   # 讀出到寫回之間不讓別的執行緒改這首歌的資料
@@ -3550,6 +3839,48 @@ def process_song(song_id: str, steps: list[str], cfg_override: dict | None = Non
 
 
 _LYRICS_POOL = None
+_EARLY_POOL = None
+
+
+def _early_lyrics(meta: dict):
+    """在背景先上網搜尋歌詞（只抓資料，不需要分離結果）。回傳 Future。"""
+    global _EARLY_POOL
+    from concurrent.futures import ThreadPoolExecutor
+    if _EARLY_POOL is None:
+        _EARLY_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="lyrics-early")
+    return _EARLY_POOL.submit(fetch_candidates, meta, "", None, 45)
+
+
+def _apply_early_lyrics(d: Path, cfg: dict, fut, report) -> bool:
+    """分離完：等先前的歌詞搜尋（最多再等 45 秒），套用最相符的版本，再逐句檢查主唱。
+    回傳 True＝這一步處理完了（套用、或確定沒有相符的）；False＝搜尋失敗，交回原本的背景搜尋。"""
+    report("套用線上歌詞、檢查主唱有沒有被分到合音", 0.62)
+    import gpu_worker as G
+    check = getattr(G.CURRENT, "check", None)
+    end = time.time() + 45
+    while not fut.done() and time.time() < end:
+        if check:
+            check()
+        time.sleep(0.3)
+    if not fut.done():
+        return False
+    try:
+        pre = fut.result()
+        find_and_store_candidates(d, cfg, apply_first=True, pre=pre)
+    except Exception as e:
+        log_error("early lyrics", e)
+        return False
+    with _META_LOCK:
+        meta = read_meta(d)
+        meta["steps"]["lyrics"] = True
+        meta.setdefault("lyrics_recognized", False)
+        write_meta(d, meta)
+    if (d / "lyrics.lrc").exists():
+        try:
+            fix_lead_gaps(d)   # 有歌詞了：逐句檢查一次（分離時只看得到整段的）
+        except Exception as e:
+            log_error("fix_lead_gaps(early)", e)
+    return True
 
 
 def search_lyrics_later(d: Path, cfg: dict, apply_first: bool = False) -> None:
@@ -3660,7 +3991,7 @@ def similarity(recognized: str, candidate: str) -> float | None:
     return round(sum(x.size for x in m.get_matching_blocks()) / len(a), 3)
 
 
-USER_AGENT = "LeihuLiantai/2.3.2 (+https://github.com/samael-leung/Leihu-singsing)"   # HTTP 標頭只能用英文字
+USER_AGENT = "LeihuLiantai/2.3.3 (+https://github.com/samael-leung/Leihu-singsing)"   # HTTP 標頭只能用英文字
 
 
 def _http_json(url: str, headers: dict | None = None, timeout: int = 8):
@@ -3758,9 +4089,15 @@ def recognized_text(d: Path) -> str:
 
 
 def find_candidates(d: Path, cfg: dict, query: str = "", check=None,
-                    budget: float = 45) -> tuple[list[str], list[dict]]:
-    """用歌名（原文與簡體）到 LRCLIB、網易雲和酷狗搜尋，與辨識結果比對後排序。"""
-    meta = read_meta(d)
+                    budget: float = 45, pre: tuple | None = None) -> tuple[list[str], list[dict]]:
+    """用歌名（原文與簡體）到 LRCLIB、網易雲和酷狗搜尋，與辨識結果比對後排序。
+    pre：先前已經抓好的（搜尋字串, 原始結果）——2.3.2 匯入時在分離的同時先上網抓，分離完再排序、套用。"""
+    tried, found = pre if pre else fetch_candidates(read_meta(d), query, check, budget)
+    return rank_candidates(d, cfg, tried, found)
+
+
+def fetch_candidates(meta: dict, query: str = "", check=None, budget: float = 45) -> tuple[list[str], dict]:
+    """只做上網搜尋（不需要分離結果）。"""
     queries = [query] if query else lyric_queries(meta)
     from concurrent.futures import ThreadPoolExecutor, wait as fwait
     tried, found, errors = [], {}, []
@@ -3798,6 +4135,12 @@ def find_candidates(d: Path, cfg: dict, query: str = "", check=None,
         pool.shutdown(wait=False, cancel_futures=True)
     if not found and errors and len(dead) == len(sites):
         raise UserError("無法連到歌詞網站，請確認網路後再試。")
+    return tried, found
+
+
+def rank_candidates(d: Path, cfg: dict, tried: list[str], found: dict) -> tuple[list[str], list[dict]]:
+    meta = read_meta(d)
+    found = {k: dict(v) for k, v in found.items()}   # 不改到呼叫的人手上的原始結果
     reliable = recognition_reliable(meta)
     rec = recognized_text(d) if reliable else ""
     dur = meta.get("duration")
@@ -3945,8 +4288,8 @@ def _lyrics_note(d: Path, note: str | None) -> None:
         write_meta(d, meta)
 
 
-def find_and_store_candidates(d: Path, cfg: dict, check=None, apply_first: bool = False) -> None:
-    _, cands = find_candidates(d, cfg, check=check)
+def find_and_store_candidates(d: Path, cfg: dict, check=None, apply_first: bool = False, pre=None) -> None:
+    _, cands = find_candidates(d, cfg, check=check, pre=pre)
     meta = read_meta(d)
     # 候選一律保留給使用者看，不再用辨識結果過濾。是否主動提示「有線上歌詞可選」：
     # 辨識可靠時看和辨識結果像不像；辨識不可靠（或沒有辨識）時看歌名和長度。
@@ -3980,14 +4323,53 @@ def find_and_store_candidates(d: Path, cfg: dict, check=None, apply_first: bool 
 
 # ---------------------------------------------------------------- 依主唱聲音對時間（不需要辨識結果，任何語言都可以）
 
+def vocal_energy_phrases(d: Path, gap: float = 0.35, min_len: float = 0.3) -> list[tuple[float, float]]:
+    """2.3.2：還沒分析旋律時，用「主唱＋合音」的音量找有在唱的段落。
+    主唱被分到合音的副歌也算得到，所以拿來對歌詞時間不會因為主唱分錯而對歪。"""
+    try:
+        y = read_audio(stem_path(d, "lead"), sr=PITCH_SR, mono=True)
+        b = stem_path(d, "back")
+        if b.exists():
+            yb = read_audio(b, sr=PITCH_SR, mono=True)
+            n = min(len(y), len(yb))
+            y = y[:n] + yb[:n]
+    except Exception:
+        return []
+    H = int(PITCH_SR * 0.02)
+    n = len(y) // H * H
+    if n < H * 50:
+        return []
+    r = np.sqrt(np.mean(y[:n].reshape(-1, H) ** 2, axis=1))
+    r = np.convolve(r, np.ones(3) / 3, "same")
+    ref = float(np.percentile(r, 95))
+    if ref <= 1e-5:
+        return []
+    on = r > 0.3 * ref   # 實測 6 首：和旋律分析結果對歌詞時間的準度相當
+    out, i = [], 0
+    while i < len(on):
+        if not on[i]:
+            i += 1
+            continue
+        j = i
+        while j < len(on) and on[j]:
+            j += 1
+        a, e = i * 0.02, j * 0.02
+        if out and a - out[-1][1] < gap:
+            out[-1] = (out[-1][0], e)
+        else:
+            out.append((a, e))
+        i = j
+    return [(a, e) for a, e in out if e - a >= min_len]
+
+
 def voice_phrases(d, gap: float = 0.35, min_len: float = 0.3) -> list[tuple[float, float]]:
-    """從旋律分析結果找出「有在唱」的段落 (開始, 結束)。"""
+    """從旋律分析結果找出「有在唱」的段落 (開始, 結束)。還沒分析旋律時改用主唱＋合音的音量。"""
     if isinstance(d, _PhraseStub):
         return d.phrases
     try:
         pj = json.loads((d / "pitch.json").read_text("utf-8"))
     except Exception:
-        return []
+        return vocal_energy_phrases(d, gap, min_len) if isinstance(d, Path) else []
     hop = pj.get("hop", HOP_S)
     on = np.array([v is not None for v in pj["midi"]])
     out, i, n = [], 0, len(on)

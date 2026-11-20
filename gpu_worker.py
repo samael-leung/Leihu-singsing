@@ -29,7 +29,7 @@ IDLE_EXIT = 30.0      # 子程式閒置幾秒後結束（把顯示卡記憶體�
 SPAWN_TIMEOUT = 90.0  # 子程式這麼久還沒連上就放棄，改在主程式裡做
 # 子程式多久沒有任何回報就當作卡住（結束它，改在主程式裡做）。分離每一小段都會回報進度；
 # 旋律分析中途沒有進度，用整體時間判斷
-STALL = {"separate": 240.0, "whisper": 900.0, "pitch": 420.0, "probe": 180.0}
+STALL = {"separate": 120.0, "whisper": 900.0, "pitch": 600.0, "probe": 180.0}
 CURRENT = threading.local()   # 目前這個執行緒的工作：check() 會在按停止／暫停時丟出例外
 MAX_WORKERS = 3       # 最多同時幾個子程式（兩首同時分離＋一首分析旋律）
 ROOT = Path(__file__).resolve().parent
@@ -220,7 +220,14 @@ def serve(address, authkey_hex: str, parent_pid: int) -> None:
     sys.path.insert(0, str(ROOT))
     import pipeline as P
     P.IN_WORKER = True
-    print(f"[gpu] 子程式 {os.getpid()} 啟動", flush=True)
+    if os.environ.get("LEIHU_CPU_WORKER"):
+        try:
+            import torch
+            torch.set_num_threads(max(1, (os.cpu_count() or 2) // 2))
+        except Exception:
+            pass
+        _set_priority(True)
+    print(f"[gpu] 子程式 {os.getpid()} 啟動" + ("（只用 CPU）" if os.environ.get("LEIHU_CPU_WORKER") else ""), flush=True)
     while True:
         try:
             msg = conn.recv()
@@ -257,6 +264,11 @@ def serve(address, authkey_hex: str, parent_pid: int) -> None:
 
 class WorkerFailed(RuntimeError):
     """子程式開不起來或卡住：改在主程式裡做（顯示卡記憶體會留到程式關閉，但工作不會卡住）。"""
+
+
+class GpuStalled(WorkerFailed):
+    """顯示卡處理程式做到一半沒有進度：幾乎都是顯示卡被其他程式（直播軟體、VTube Studio、遊戲）佔滿。
+    這時改在主程式裡用顯示卡做只會一樣卡、還會拖慢整台電腦，所以不改到主程式，交給呼叫的人改用 CPU。"""
 
 
 class RemoteError(RuntimeError):
@@ -351,7 +363,8 @@ def _win_kill(pid: int) -> None:
 
 
 class Pool:
-    def __init__(self):
+    def __init__(self, cpu: bool = False):
+        self.cpu = cpu   # True：只用 CPU 的處理程式（直播中用，完全不碰顯示卡）
         self.cv = threading.Condition()
         self.workers: list[_Worker] = []
         self.starting = 0
@@ -388,6 +401,9 @@ class Pool:
                f"import gpu_worker; gpu_worker.serve({self.listener.address!r}, {self.authkey.hex()!r}, {os.getpid()})"]
         flags = 0x08000000 if sys.platform == "win32" else 0   # CREATE_NO_WINDOW
         env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1")
+        if self.cpu:   # 看不到顯示卡：PyTorch、ONNX 都改用 CPU；只用一半的核心，留給直播軟體
+            half = str(max(1, (os.cpu_count() or 2) // 2))
+            env.update(CUDA_VISIBLE_DEVICES="-1", OMP_NUM_THREADS=half, MKL_NUM_THREADS=half, LEIHU_CPU_WORKER="1")
         out = None
         try:
             sys.stdout.flush()
@@ -531,7 +547,7 @@ class Pool:
                 if not w.alive():
                     raise RuntimeError(f"顯示卡處理程式意外結束（代碼 {w.proc.returncode}），詳細原因在 logs/app.log")
                 if time.time() - last > stall:
-                    raise WorkerFailed(f"顯示卡處理程式 {stall:.0f} 秒沒有回應（{name}）")
+                    raise GpuStalled(f"顯示卡處理程式 {stall:.0f} 秒沒有回應（{name}）")
         finally:
             if ok and w.alive():
                 self._release(w)
@@ -575,9 +591,44 @@ def _is_child(pid: int, parent: int) -> bool:
 
 
 POOL = Pool()
+CPU_POOL = Pool(cpu=True)   # 2.3.2：直播中用的 CPU 處理程式
 
 
 _BROKEN = {"until": 0.0, "why": ""}
+# 2.3.2：顯示卡記憶體不到 10 GB 時，一次只讓一個工作用顯示卡。
+# 實測 8 GB 卡上「分離（BS-Roformer）」和「上一首的音高分析」同時跑，分離會卡在 2% 不動。
+_GPU_GATE = threading.Lock()
+
+
+class _gate:
+    def __init__(self, progress):
+        self.on, self.progress = False, progress
+
+    def __enter__(self):
+        try:
+            import pipeline as P
+            # Keep the integration's explicit parallel setting on smaller cards.
+            # The default still serializes work there; live processing uses CPU_POOL.
+            cfg = P.load_config()
+            if P.parallel_ok() or (cfg.get("parallel_separation") and not P.live_status(cfg)["hold"]):
+                return self
+        except Exception:
+            pass
+        check = getattr(CURRENT, "check", None)
+        waited = False
+        while not _GPU_GATE.acquire(timeout=0.5):
+            if not waited:
+                waited = True
+                print("[gpu] 顯示卡正在處理另一個工作，等它做完", flush=True)
+            if check:
+                check()   # 等的時候也能停止、暫停
+        self.on = True
+        return self
+
+    def __exit__(self, *exc):
+        if self.on:
+            _GPU_GATE.release()
+        return False
 
 
 def _local(name: str, *args, progress=None, **kw):
@@ -587,9 +638,13 @@ def _local(name: str, *args, progress=None, **kw):
     return TASKS[name](P, progress or (lambda s, p: None), *args, **kw)
 
 
-def call(name: str, *args, progress=None, **kw):
+def call(name: str, *args, progress=None, cpu: bool = False, **kw):
     """主程式呼叫：直播中（偵測到直播軟體）子程式用較低的優先順序跑。
+    cpu=True：在完全不碰顯示卡的處理程式裡跑（直播中用：直播軟體和 VTube Studio 佔著顯示卡時，
+    顯示卡運算會被擠到幾乎停住，實測分離一首卡在 2% 好幾分鐘）。
     子程式開不起來或卡住時，這次改在主程式裡做，接下來 10 分鐘也先不開子程式，避免每首都卡一次。"""
+    if cpu:
+        return CPU_POOL.call(name, *args, progress=progress, low=True, **kw)
     low = False
     try:
         import pipeline as P
@@ -599,8 +654,20 @@ def call(name: str, *args, progress=None, **kw):
     if time.time() < _BROKEN["until"]:
         return _local(name, *args, progress=progress, **kw)
     try:
-        return POOL.call(name, *args, progress=progress, low=low, **kw)
-    except WorkerFailed as e:
-        _BROKEN.update(until=time.time() + 600, why=str(e))
+        with _gate(progress):
+            return POOL.call(name, *args, progress=progress, low=low, **kw)
+    except GpuStalled as e:
         print(f"[gpu] {e}", flush=True)
+        try:
+            import pipeline as P
+            P.gpu_stalled_mark()   # 接下來一段時間先當作顯示卡很忙：新工作直接用 CPU
+        except Exception:
+            pass
+        if name == "pitch":
+            print("[gpu] 顯示卡太忙，音高分析改用 CPU 處理", flush=True)
+            return CPU_POOL.call(name, *args, progress=progress, low=True, **kw)
+        raise   # separate：由 pipeline 改用 CPU＋標準模型重做；其他工作直接回報失敗
+    except WorkerFailed as e:   # 子程式根本開不起來：才改在主程式裡做
+        print(f"[gpu] {e}", flush=True)
+        _BROKEN.update(until=time.time() + 600, why=str(e))
         return _local(name, *args, progress=progress, **kw)

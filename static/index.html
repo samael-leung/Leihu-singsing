@@ -8,7 +8,7 @@
 </head>
 <body>
 <header class="bar">
-  <span class="logo">雷虎練唱台<small id="ver">2.3.2</small></span>
+  <span class="logo">雷虎練唱台<small id="ver">2.3.3</small></span>
   <nav class="row">
     <button id="nav-lib" class="tab cur">歌曲庫</button>
     <button id="nav-practice" class="tab" disabled>練唱</button>
@@ -103,8 +103,8 @@
       <button id="cat-del" class="ghost danger">刪除分類</button>
     </div>
     <div id="live-hold" class="yt-pause live-hold" role="status" hidden>
-      <div><b>直播中，背景工作已暫停。</b>
-        <span class="hint"><span id="live-hold-why"></span>升級分離、細修、最高品質處理會把顯示卡吃滿，直播畫面和 VTube Studio 會掉格；直播軟體關掉或關閉直播模式後會自動繼續。直播中匯入的歌照常處理（先用輕量模型，下播後自動補做高品質），KEY 轉換、錄音評分也不受影響。</span></div>
+      <div><b>直播中或顯示卡忙碌，背景工作已暫停。</b>
+        <span class="hint"><span id="live-hold-why"></span>升級分離、細修、最高品質處理會把顯示卡吃滿，直播畫面和 VTube Studio 會掉格；直播軟體關掉、關閉直播模式或顯示卡空出來後會自動繼續。這段時間匯入的歌照常處理（只用 CPU＋輕量模型，之後自動補做高品質），KEY 轉換、錄音評分也不受影響。</span></div>
       <button id="live-hold-go" class="ghost" title="接下來一小時不管直播偵測，照常處理（會影響直播流暢度）">直播中也照常處理</button>
     </div>
     <div id="yt-pause" class="yt-pause" role="alert" hidden>
@@ -172,6 +172,7 @@
         <span class="grp"><label>歌詞</label>
           <button id="lyr-show" title="在旋律上方逐字顯示歌詞">字在旋律上</button>
           <button id="lyr-edit" title="拖曳調整每句、每個字的時間">調整</button>
+          <button id="lyr-drag" title="開著時，練唱中或暫停時都可以直接用滑鼠拖曳上方的句子標記，調整每句開始的時間（不會暫停播放）">拖曳歌詞</button>
           <button id="lyr-color" title="唱到哪個字就把哪個字上色；歌詞時間沒對準時可以關掉">逐字上色</button>
           <button id="sheet-open2" title="把旋律和歌詞畫成圖片（像樂譜一樣一句一列），存到下載資料夾">旋律譜圖片</button>
           <button id="lyr-flag" title="歌詞不準先標起來：歌曲庫的「歌詞待修」分類會列出來，下播後一次處理（Ctrl+Alt+F）">歌詞待修</button>
