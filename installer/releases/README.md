@@ -1,3 +1,25 @@
+# 整合版 2.3.3 — 合併上游 2.3.2，保留所有既有功能
+
+2026-11-21 更新，只發佈至 `leihu-song-request-sync` 分支。
+
+- **已有整合版：[程式更新檔 Update.exe](./LeihuLiantai-windows-ai-choice-2.3.3-Update.exe)**
+- [首次安裝／修復用 Setup.exe](./LeihuLiantai-windows-ai-choice-2.3.3-Setup.exe)
+- [完整移除工具](./LeihuLiantai-windows-ai-choice-2.3.3-CleanUninstall.exe)
+
+已合併上游 `LeihuTW/Leihu-singsing` 的 2.3.2（`5ddd04619e74ee56154a9966b6f54ff327614793`）：直播／顯示卡忙碌時以獨立 CPU 子程式處理、GPU 無進度時退回 CPU、主唱被誤分到合音的補回與提醒、分離同時先搜尋歌詞，以及播放／暫停時拖曳歌詞句子。另修正逐字拖曳的未定義變數、64 位元 Windows 程序清單 Handle 型別、GPU 卡住後重複嘗試相同 GPU 的問題，以及暫停分離時誤進入 DSP 備援。主唱背景掃描會等待自訂播放清單工作完成。
+
+YouTube 單曲下載、歌名搜尋、Excel／CSV、播放清單批量匯入／停止／重試／匯出保持直接可用，無須隱藏解鎖；舊 `yt_enabled=false` 也可使用。低顯存預設一次一個 GPU 工作，但保留手動並行設定。既有雙向同步、模糊／永久配對、點歌者與 KEY／佇列、本機／Claude／Gemini／OpenAI、各供應商金鑰、音訊強制對齊、錄音、FLAC、日文標音、歌單匯出／回顧、歌曲庫搬移與所有前版自訂功能保留。
+
+**先儲存錄音、關閉練唱台，再執行 Update.exe，選原安裝資料夾。** 可從 2.3.2 或較早的 Windows AI 選擇整合版直接更新；不重裝 Python、套件或模型，保留歌曲、錄音、配對、設定與金鑰。程式內更新只使用本整合分支，驗證大小與 SHA-256。
+
+來源合併提交：`328701dfd547cab239cfa5998d4029ea6dd8947f`。Python 204 項測試中 200 通過、4 項環境限定跳過；16 項 JavaScript、11 項相容修復測試及 4 個 smoke 通過。前版 101 個 app 路由、380 個 UI ID 及 8 個核心模組的具名函式全部保留，新增歌詞拖曳按鈕。實際 CPU 子程式完成硬體 probe 與兩次音高推論，確認不見 CUDA、重用子程式且主程式不載入 torch。
+
+Flask／Node／Chromium 實測雙向切歌、點歌者、模糊配對／重載恢復、七個設定分頁／手動並行、所有 YouTube 匯入流程，以及暫停／播放中的實際 canvas 歌詞拖曳；沒有瀏覽器程式錯誤。NSIS 3.11 建置，Setup 與 Update 壓縮完整性及 38 個封裝檔逐一比對通過；大小與檢查碼見 [SHA256SUMS](./SHA256SUMS)。Windows 安裝 GUI、實體 GPU／正式分離模型與實際直播軟體尚需 Windows 實機驗證。
+
+同日另將點歌系統合併至 2026.11-2（`333337d`），保留 `!so` Clip 暫停修正與雙向同步；157 項測試全數通過。只更新兩個 repo 的 `leihu-song-request-sync`。
+
+---
+
 # 整合版 2.3.2 — 合併上游 2.3.1，保留所有既有功能
 
 2026-11-18 更新，只發佈至 `leihu-song-request-sync` 分支。
